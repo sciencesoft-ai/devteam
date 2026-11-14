@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Value substitutions applied to $WORK_DIR after patches and overlay.
+#
+# For changes that are "swap value A for value B" (hosts, names, ids) this is
+# sturdier than a patch: it doesn't depend on surrounding lines, so upstream
+# churn nearby doesn't break it. Every rule REQUIRES at least one match, so if
+# upstream moves or renames a value the build fails loudly instead of shipping
+# a binary that still points at Kiro's update servers.
+#
+# Rule format (one per line):  file<TAB>old<TAB>new
+# Internals (KIROCREW_* env vars, ~/.kiro/crew, kiro_crew package) are left
+# alone on purpose: renaming them would conflict on every upstream sync.
+source "$(dirname "$0")/lib.sh"
+
+UPD_OLD="https://updates.crew.kiro.dev"
+DL_OLD="https://download.crew.kiro.dev"
+
+RULES="$(cat <<EOF
+src/kiro_crew/platform/update_layout.py	$UPD_OLD	$UPDATE_FEED_BASE
+src/kiro_crew/platform/update_layout.py	$DL_OLD	$DOWNLOAD_BASE
+website/electron/auto-update.js	$UPD_OLD	$UPDATE_FEED_BASE
+website/electron/auto-update.js	$DL_OLD	$DOWNLOAD_BASE
+website/electron/package.json	$UPD_OLD	$UPDATE_FEED_BASE
+cli.sh	$UPD_OLD	$UPDATE_FEED_BASE
+cli.sh	$DL_OLD	$DOWNLOAD_BASE
+install.sh	$DL_OLD	$DOWNLOAD_BASE
+setup.sh	$DL_OLD	$DOWNLOAD_BASE
+minimal_install.sh	$DL_OLD	$DOWNLOAD_BASE
+website/electron/package.json	"appId": "com.amazon.kiro.crew"	"appId": "$APP_ID"
+website/electron/package.json	"productName": "KiroCrew"	"productName": "$PRODUCT_NAME"
+website/electron/package.json	"Amazon Web Services, Inc."	"$WIN_PUBLISHER_NAME"
+packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew Nightly"	PRODUCT_NAME="$PRODUCT_NAME Nightly"
+packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew"	PRODUCT_NAME="$PRODUCT_NAME"
+website/electron/package.json	"maintainer": "Kiro Crew Maintainers <maintainers@crew.kiro.dev>"	"maintainer": "$PACKAGE_MAINTAINER"
+EOF
+)"
+
+log "applying value substitutions"
+python3 -I "$DEVTEAM_ROOT/scripts/rebrand.py" "$WORK_DIR" <<<"$RULES" \
+  || die "rebrand failed (an upstream value moved; update scripts/rebrand.sh)"

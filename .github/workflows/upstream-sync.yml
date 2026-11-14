@@ -1,0 +1,103 @@
+name: upstream-sync
+
+# Daily: if kirodotdev/kirocrew has a newer stable tag than UPSTREAM_REF,
+#   1. sync the fork's main and create the tag there (needs secret FORK_PUSH_TOKEN:
+#      fine-grained PAT with contents write on the fork; step skipped if unset)
+#   2. bump UPSTREAM_REF in devteam.conf and reset DEVTEAM_RELEASE to 1
+#   3. check that all patches + rebrand rules still apply
+#   4. open a PR (patches apply) or an issue (they don't)
+#
+# Note: PRs opened with GITHUB_TOKEN don't trigger other workflows. Set secret
+# SYNC_PR_TOKEN (a fine-grained PAT with contents + pull-requests write on this
+# repo) if you want build.yml to run on the sync PR automatically.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FORK_PUSH_TOKEN: ${{ secrets.FORK_PUSH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Look for a newer stable upstream tag
+        id: check
+        run: |
+          set +e
+          latest="$(scripts/check-upstream.sh)"; rc=$?
+          set -e
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$rc" = 0 ]; then echo "new=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" = 10 ]; then echo "new=false" >> "$GITHUB_OUTPUT"; echo "up to date ($latest)"
+          else exit "$rc"; fi
+
+      - name: Mirror upstream into fork
+        if: steps.check.outputs.new == 'true' && env.FORK_PUSH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.FORK_PUSH_TOKEN }}
+        run: |
+          source devteam.conf
+          fork="$(echo "$UPSTREAM_REPO" | sed -E 's#https://github.com/##; s#\.git$##')"
+          v="${{ steps.check.outputs.latest }}"
+          # Fast-forward the fork's main (same as the "Sync fork" button).
+          gh api -X POST "repos/$fork/merge-upstream" -f branch=main || echo "::warning::fork main not synced (diverged?)"
+          # Forks share objects with upstream, so the tag can point at upstream's commit.
+          sha="$(git ls-remote "$UPSTREAM_CANONICAL" "refs/tags/$v^{}" | cut -f1)"
+          [ -n "$sha" ] || sha="$(git ls-remote "$UPSTREAM_CANONICAL" "refs/tags/$v" | cut -f1)"
+          gh api "repos/$fork/git/refs" -f ref="refs/tags/$v" -f sha="$sha" \
+            || echo "::warning::tag $v not created in fork (already exists?)"
+
+      - name: Bump pin
+        if: steps.check.outputs.new == 'true'
+        run: |
+          sed -i -E 's/^UPSTREAM_REF=".*"/UPSTREAM_REF="${{ steps.check.outputs.latest }}"/' devteam.conf
+          sed -i -E 's/^DEVTEAM_RELEASE="[^"]*"/DEVTEAM_RELEASE="1"/' devteam.conf
+
+      - name: Check patches and rebrand rules
+        id: prepare
+        if: steps.check.outputs.new == 'true'
+        continue-on-error: true
+        run: scripts/prepare.sh 2>&1 | tee /tmp/prepare.log
+
+      - name: Open PR
+        if: steps.check.outputs.new == 'true' && steps.prepare.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN || github.token }}
+        run: |
+          v="${{ steps.check.outputs.latest }}"
+          branch="sync/upstream-$v"
+          git config user.name "devteam-sync[bot]"
+          git config user.email "devteam-sync@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "Bump upstream to $v"
+          git push -f origin "$branch"
+          gh pr view "$branch" >/dev/null 2>&1 || gh pr create --base main --head "$branch" \
+            --title "Bump upstream KiroCrew to $v" \
+            --body "Upstream released \`$v\`. All patches and rebrand rules apply cleanly.
+
+          Before merging: review the [upstream changelog](https://github.com/kirodotdev/kirocrew/releases/tag/$v) and wait for the \`build\` check."
+
+      - name: Open issue (patches no longer apply)
+        if: steps.check.outputs.new == 'true' && steps.prepare.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.check.outputs.latest }}"
+          title="Upstream $v: patches or rebrand rules need updating"
+          if gh issue list --state open --search "$title in:title" --json number -q '.[0].number' | grep -q .; then
+            echo "issue already open"; exit 0
+          fi
+          { echo "Upstream released \`$v\` but \`scripts/prepare.sh\` failed."
+            echo; echo "Fix locally: set \`UPSTREAM_REF=\"$v\"\` in devteam.conf, run \`scripts/patch-dev.sh\`, resolve, then \`scripts/export-patches.sh\`."
+            echo; echo '```'; tail -40 /tmp/prepare.log | sed 's/\x1b\[[0-9;]*m//g'; echo '```'; } > /tmp/body.md
+          gh issue create --title "$title" --body-file /tmp/body.md

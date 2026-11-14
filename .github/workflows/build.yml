@@ -1,0 +1,51 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "upstream make target (wheel | desktop | test)"
+        default: wheel
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # prepare = checkout pinned tag + patches + overlay + rebrand.
+      # Fails here if a patch no longer applies or a rebrand value moved upstream.
+      - name: Prepare DevTeam source tree
+        run: scripts/prepare.sh
+
+      - name: Build
+        run: SKIP_PREPARE=1 scripts/build.sh "${{ inputs.target || 'wheel' }}"
+
+      - name: Version label
+        id: ver
+        run: echo "version=$(cat work/kirocrew/.devteam-version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devteam-${{ steps.ver.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
