@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: DevTeam <devteam@localhost>
+Date: Sat, 14 Nov 2026 23:43:44 +0000
+Subject: [PATCH] cli: add 'devteam' console script alias
+
+Installs a 'devteam' command next to 'kirocrew', both pointing at the
+same entry point. The 'kirocrew' name stays because upstream scripts,
+docs and the desktop app's PATH fallback call it.
+
+diff --git a/pyproject.toml b/pyproject.toml
+index 6f0298399632f12563975c09ba1885e97478995d..89b7785d6527609fa2fe6b8991e87d162d26d4dc 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -24,6 +24,7 @@ Homepage = "https://github.com/kirodotdev/KiroCrew"
+ 
+ [project.scripts]
+ kirocrew = "kiro_crew._bootstrap:main"
++devteam = "kiro_crew._bootstrap:main"
+ 
+ [dependency-groups]
+ # Pinned dev tool versions for reproducible CI. Bump as needed.
+diff --git a/setup.cfg b/setup.cfg
+index 691f35ada71415c78e08d00255cdd0fd1dad1bb4..8bf4ca66c5bfaf0d154664a0768961ba9cda3f44 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -432,6 +432,7 @@ kiro_crew =
+ #                      installs, then dispatches to kiro_crew.cli:main)
+ console_scripts =
+     kirocrew = kiro_crew._bootstrap:main
++    devteam = kiro_crew._bootstrap:main
+ 
+ # Configuration for pytest; enable coverage for KiroCrew, emit
+ # XML, HTML, and terminal reports.
