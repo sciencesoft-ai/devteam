@@ -1,3 +1,8 @@
 work/
 dist/
 __pycache__/
+
+# Never commit private keys.
+*.pfx
+*.p12
+*.key

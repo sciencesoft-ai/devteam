@@ -7,7 +7,11 @@
 # upstream moves or renames a value the build fails loudly instead of shipping
 # a binary that still points at Kiro's update servers.
 #
-# Rule format (one per line):  file<TAB>old<TAB>new
+# Rule format (one per line):  file<TAB>old<TAB>new   (new may be empty = delete)
+#
+# Windows signing: upstream signs through its own AWS Signer hook
+# (win.signtoolOptions.sign). We drop that hook so electron-builder signs with
+# our certificate from WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD; no cert -> unsigned.
 # Internals (KIROCREW_* env vars, ~/.kiro/crew, kiro_crew package) are left
 # alone on purpose: renaming them would conflict on every upstream sync.
 source "$(dirname "$0")/lib.sh"
@@ -32,9 +36,14 @@ website/electron/package.json	"Amazon Web Services, Inc."	"$WIN_PUBLISHER_NAME"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew Nightly"	PRODUCT_NAME="$PRODUCT_NAME Nightly"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew"	PRODUCT_NAME="$PRODUCT_NAME"
 website/electron/package.json	"maintainer": "Kiro Crew Maintainers <maintainers@crew.kiro.dev>"	"maintainer": "$PACKAGE_MAINTAINER"
+website/electron/package.json	"sign": "./scripts/sign-windows.js",	
+website/electron/main.js	"com.amazon.kiro.crew.nightly"	"$APP_ID.nightly"
+website/electron/main.js	"com.amazon.kiro.crew"	"$APP_ID"
+packaging/build-desktop.sh	-c.win.appId=com.amazon.kiro.crew.nightly	-c.win.appId=$APP_ID.nightly
+packaging/build-desktop.sh	-c.nsis.guid=0f417bf9-2759-51d6-acfb-f864805d1f41	-c.nsis.guid=$NIGHTLY_NSIS_GUID
 EOF
 )"
 
 log "applying value substitutions"
-python3 -I "$DEVTEAM_ROOT/scripts/rebrand.py" "$WORK_DIR" <<<"$RULES" \
+"$PYTHON" -I "$DEVTEAM_ROOT/scripts/rebrand.py" "$WORK_DIR" <<<"$RULES" \
   || die "rebrand failed (an upstream value moved; update scripts/rebrand.sh)"

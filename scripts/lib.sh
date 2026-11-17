@@ -11,6 +11,8 @@ WORK_DIR="${WORK_DIR:-$DEVTEAM_ROOT/work/kirocrew}"
 PATCH_DIR="$DEVTEAM_ROOT/patches"
 OVERLAY_DIR="$DEVTEAM_ROOT/overlay"
 DEV_BRANCH="devteam-dev"
+# Windows runners: set PYTHON=python (python3 there may be the Store stub).
+PYTHON="${PYTHON:-python3}"
 
 log()  { printf '\033[1;36m[devteam]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[devteam] error:\033[0m %s\n' "$*" >&2; exit 1; }
