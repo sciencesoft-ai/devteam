@@ -14,6 +14,7 @@ devteam.conf          pinned upstream tag, product name, app id, update hosts, s
 patches/              our code changes, as a git format-patch series (applied in order)
 overlay/              whole files copied over the tree (icons, banner, default config)
 extensions/           DevTeam skills / MCP servers / hooks / Apps — no patching needed
+certs/                public signing certificates (never private keys) + how to trust them
 scripts/
   prepare.sh          tag checkout → patches → overlay → rebrand  (output: work/kirocrew)
   rebrand.sh/.py      literal value swaps (update hosts, appId, product name); fail if a value is gone
@@ -23,6 +24,7 @@ scripts/
   check-upstream.sh   newest stable upstream tag
 .github/workflows/
   build.yml           prepare + build wheel on every push / PR
+  build-windows.yml   signed NSIS installer (windows-latest); verifies the signer thumbprint
   upstream-sync.yml   daily: new stable tag → PR (or an issue if patches break)
 ```
 
@@ -38,6 +40,15 @@ Requirements: git, Python 3.12+, Node 22.12+, make.
 ```bash
 scripts/build.sh            # → dist/kirocrew-<ver>-py3-none-any.whl  (installs `kirocrew` and `devteam`)
 scripts/build.sh desktop    # DMG / AppImage — see upstream docs/build/desktop-app.md for host needs
+```
+
+Windows installer: the build runs in CI (`build-windows.yml`, or run it by hand from the Actions tab). To build locally on Windows, use Git Bash with Node 24, Python 3.12 and uv:
+
+```bash
+PYTHON=python scripts/prepare.sh
+cd work/kirocrew
+WIN_CSC_LINK=/c/path/devteam-codesign.pfx WIN_CSC_KEY_PASSWORD=... bash packaging/build-desktop.sh
+# → website/electron/dist/DevTeam Setup <ver>.exe
 ```
 
 ## Where a change goes (try in this order)
@@ -76,7 +87,8 @@ Versions are labelled `<upstream tag>+devteam.<DEVTEAM_RELEASE>`, for example `v
 
 - [ ] Real update and download hosts in `devteam.conf`. The placeholders end in `.invalid` on purpose, so that auto-update fails closed instead of installing stock KiroCrew.
 - [ ] Host the update feed. electron-updater reads `<UPDATE_FEED_BASE>/feed/<channel>/latest-*.yml`, and the Python updater uses the same two bases. See upstream `docs/build/release.md`.
-- [ ] Signing: Apple Developer ID and notarization, a Windows code-signing cert (`WIN_PUBLISHER_NAME` must match its subject), and wheel signing keys. Add these as repo secrets and add a release workflow.
+- [x] Windows signing: self-signed `CN=ScienceSoft AI DevTeam`, expires 2027-11-15. See `certs/README.md`, including how to trust it on user machines.
+- [ ] macOS signing and notarization (Apple Developer ID), wheel signing keys, and a release workflow that publishes to the update feed.
 - [ ] DevTeam icons and banner in `overlay/` (paths below).
 - [ ] `PACKAGE_MAINTAINER` in `devteam.conf`.
 - [ ] Decide on the `kirocrew://` URL scheme. It is left unchanged for now because the app's code uses it.
@@ -89,4 +101,6 @@ Versions are labelled `<upstream tag>+devteam.<DEVTEAM_RELEASE>`, for example `v
 | Secret | Used by | Purpose |
 |---|---|---|
 | `FORK_PUSH_TOKEN` | upstream-sync | Fine-grained PAT with contents write on `sciencesoft-ai/KiroCrew`. Syncs the fork's main and creates release tags there. Optional. |
+| `WIN_CSC_LINK` | build-windows | Base64 of the Windows code-signing `.pfx` (see `certs/README.md`). |
+| `WIN_CSC_KEY_PASSWORD` | build-windows | Password for that `.pfx`. |
 | `SYNC_PR_TOKEN` | upstream-sync | PAT used to open sync PRs, so that `build.yml` runs on them. Optional. |

@@ -1,0 +1,131 @@
+name: build-windows
+
+# DevTeam Windows desktop installer (NSIS, x64), signed with our certificate.
+#
+# Signing: electron-builder signs the app exe, the installer and the
+# uninstaller with the .pfx from secrets WIN_CSC_LINK (base64 of the .pfx) +
+# WIN_CSC_KEY_PASSWORD. Upstream's AWS Signer hook is removed by
+# scripts/rebrand.sh. Without the secrets (e.g. PRs from forks) the installer
+# is built UNSIGNED and the run says so; release runs (dispatch with
+# require_signing) fail instead.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - devteam.conf
+      - patches/**
+      - overlay/**
+      - scripts/**
+      - certs/**
+      - .github/workflows/build-windows.yml
+  workflow_dispatch:
+    inputs:
+      require_signing:
+        description: "Fail if the installer is not signed with certs/devteam-codesign.cer"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      # secrets.* can't be used in a step-level `if`; hoist a flag instead.
+      HAS_SIGNING: ${{ secrets.WIN_CSC_LINK != '' && 'true' || '' }}
+      REQUIRE_SIGNING: ${{ inputs.require_signing == true && 'true' || '' }}
+      # Git Bash: python3 can resolve to the Microsoft Store stub.
+      PYTHON: python
+    steps:
+      # Bash scripts and patches must keep LF endings on the Windows runner.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # build-desktop.sh provisions python-build-standalone through uv.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Signing preflight
+        shell: bash
+        run: |
+          if [ -n "$HAS_SIGNING" ]; then
+            echo "Signing with certificate from WIN_CSC_LINK"
+          elif [ -n "$REQUIRE_SIGNING" ]; then
+            echo "::error::require_signing is set but secret WIN_CSC_LINK is missing"; exit 1
+          else
+            echo "::warning::WIN_CSC_LINK not set: building an UNSIGNED installer"
+          fi
+
+      - name: Prepare DevTeam source tree
+        shell: bash
+        run: scripts/prepare.sh
+
+      - name: Build desktop installer
+        shell: bash
+        working-directory: work/kirocrew
+        run: bash packaging/build-desktop.sh
+        env:
+          # Picked up by electron-builder; empty values = unsigned build.
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Verify installer, blockmap and signature
+        shell: pwsh
+        working-directory: work/kirocrew/website/electron/dist
+        run: |
+          $installers = @(Get-ChildItem -Filter *.exe)
+          if ($installers.Count -eq 0) { throw "no installer (.exe) produced" }
+          $expected = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+            "$env:GITHUB_WORKSPACE\certs\devteam-codesign.cer")).Thumbprint
+          foreach ($exe in $installers) {
+            if (-not (Test-Path "$($exe.FullName).blockmap")) {
+              throw "$($exe.Name) has no .blockmap (auto-update would fall back to full downloads)"
+            }
+            $sig = Get-AuthenticodeSignature $exe.FullName
+            $thumb = $sig.SignerCertificate.Thumbprint
+            # Self-signed: Status is UnknownError/NotTrusted on the runner (root not
+            # installed). What matters is WHO signed it, so compare thumbprints.
+            if ($thumb -eq $expected) {
+              "{0}: signed by {1} (status on runner: {2})" -f $exe.Name, $sig.SignerCertificate.Subject, $sig.Status
+            } elseif ($env:HAS_SIGNING -or $env:REQUIRE_SIGNING) {
+              throw "$($exe.Name): expected signer $expected, got '$thumb' ($($sig.Status))"
+            } else {
+              Write-Warning "$($exe.Name): unsigned"
+            }
+          }
+
+      - name: Version label
+        id: ver
+        shell: bash
+        run: echo "version=$(cat work/kirocrew/.devteam-version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devteam-${{ steps.ver.outputs.version }}-windows-x64
+          path: |
+            work/kirocrew/website/electron/dist/*.exe
+            work/kirocrew/website/electron/dist/*.exe.blockmap
+            work/kirocrew/website/electron/dist/latest.yml
+          if-no-files-found: error
+          retention-days: 14
