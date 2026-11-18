@@ -35,6 +35,7 @@ website/electron/package.json	"productName": "KiroCrew"	"productName": "$PRODUCT
 website/electron/package.json	"Amazon Web Services, Inc."	"$WIN_PUBLISHER_NAME"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew Nightly"	PRODUCT_NAME="$PRODUCT_NAME Nightly"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew"	PRODUCT_NAME="$PRODUCT_NAME"
+packaging/build-desktop.sh	KiroCrew Nightly	$PRODUCT_NAME Nightly
 website/electron/package.json	"maintainer": "Kiro Crew Maintainers <maintainers@crew.kiro.dev>"	"maintainer": "$PACKAGE_MAINTAINER"
 website/electron/package.json	"sign": "./scripts/sign-windows.js",	
 website/electron/main.js	"com.amazon.kiro.crew.nightly"	"$APP_ID.nightly"

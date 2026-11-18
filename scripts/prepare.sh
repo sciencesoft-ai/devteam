@@ -49,8 +49,28 @@ if find "$OVERLAY_DIR" -type f ! -name README.md | grep -q .; then
     done
 fi
 
+# --- distribution identity (data home, port, CLI name, default agent, ...) ----
+log "writing distribution identity"
+PRODUCT_NAME="$PRODUCT_NAME" CLI_NAME="$CLI_NAME" DATA_HOME="$DATA_HOME" \
+GATEWAY_PORT="$GATEWAY_PORT" DEFAULT_AGENT="$DEFAULT_AGENT" URL_SCHEME="$URL_SCHEME" \
+SERVICE_NAME="$SERVICE_NAME" DESKTOP_PACKAGE_NAME="$DESKTOP_PACKAGE_NAME" \
+  "$PYTHON" -I "$DEVTEAM_ROOT/scripts/distribution.py" "$WORK_DIR" \
+  || die "distribution identity failed (see message above)"
+
 # --- value substitutions -----------------------------------------------------
 "$DEVTEAM_ROOT/scripts/rebrand.sh"
+
+# --- user-visible text --------------------------------------------------------
+if [ ! -d "$DEVTEAM_ROOT/scripts/strings/node_modules/@babel/parser" ]; then
+  log "installing the text-rewrite parser (scripts/strings)"
+  npm ci --prefix "$DEVTEAM_ROOT/scripts/strings" --silent --no-audit --no-fund \
+    || die "npm ci in scripts/strings failed (Node.js is required)"
+fi
+log "rewriting user-visible text"
+PRODUCT_NAME="$PRODUCT_NAME" CLI_NAME="$CLI_NAME" REPO_URL="$REPO_URL" \
+SOURCE_REPO_URL="$SOURCE_REPO_URL" DEFAULT_AGENT="$DEFAULT_AGENT" \
+  "$PYTHON" -I "$DEVTEAM_ROOT/scripts/rewrite_strings.py" "$WORK_DIR" \
+  || die "text rewrite failed (see message above)"
 
 echo "$(devteam_version)" > "$WORK_DIR/.devteam-version"
 log "prepared $(devteam_version) in $WORK_DIR"

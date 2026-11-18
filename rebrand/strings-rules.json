@@ -1,0 +1,66 @@
+{
+  "_doc": "Rewrites applied to user-visible TEXT ONLY (string literals, catalog values, HTML/installer text) by scripts/rewrite_strings.py. Patterns are JavaScript-and-Python-compatible regexes; {PRODUCT}, {CLI}, {REPO_HP}, {SRC_HP} come from devteam.conf. Order matters: links first, so a repo URL is never seen as a product name.",
+  "links": [
+    {
+      "find": "github\\.com/kirodotdev/KiroCrew/discussions/?",
+      "replace": "{REPO_HP}/issues"
+    },
+    {
+      "find": "(github\\.com/kirodotdev/KiroCrew/issues/new)\\?template=[\\w.-]+&",
+      "replace": "$1?"
+    },
+    {
+      "find": "(github\\.com/kirodotdev/KiroCrew/issues/new)\\?template=[\\w.-]+",
+      "replace": "$1"
+    },
+    {
+      "find": "github\\.com/kirodotdev/KiroCrew/issues(?!/\\d)",
+      "replace": "{REPO_HP}/issues"
+    },
+    {
+      "find": "github\\.com/kirodotdev/KiroCrew/(blob|tree)/",
+      "replace": "{SRC_HP}/$1/"
+    },
+    {
+      "find": "github\\.com/kirodotdev/KiroCrew/releases(?!/download)",
+      "replace": "{REPO_HP}/releases"
+    },
+    {
+      "find": "github\\.com/kirodotdev/KiroCrew(?![A-Za-z0-9_./-])",
+      "replace": "{REPO_HP}"
+    },
+    {
+      "find": "(?<![A-Za-z0-9_./-])kirodotdev/KiroCrew(?![A-Za-z0-9_.-])",
+      "replace": "{REPO_PATH}"
+    },
+    {
+      "find": "https://kiro\\.dev/discord/?",
+      "replace": "https://{REPO_HP}/issues"
+    }
+  ],
+  "product": [
+    {
+      "find": "(?<![A-Za-z0-9_-])KiroCrew(?=(?: Nightly)?\\.app\\b)",
+      "replace": "{PRODUCT}"
+    },
+    {
+      "find": "(?<![A-Za-z0-9_./-])Kiro Crew(?![A-Za-z0-9_]|(?:['’]s)? (?:team|official (?:app )?catalog))",
+      "replace": "{PRODUCT}"
+    },
+    {
+      "find": "(?<![A-Za-z0-9_./-])KiroCrew(?![A-Za-z0-9_/-]|\\.(?:app|exe|dmg|cmd)\\b)",
+      "replace": "{PRODUCT}",
+      "prose_only": true
+    }
+  ],
+  "cli": [
+    {
+      "find": "(?<![A-Za-z0-9_./@\\\\$-])kirocrew(?=[ \\t]+(?:--?)?[a-z<\\[])",
+      "replace": "{CLI}"
+    },
+    {
+      "find": "(?<=`)kirocrew(?=`)",
+      "replace": "{CLI}"
+    }
+  ]
+}

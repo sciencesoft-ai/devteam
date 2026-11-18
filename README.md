@@ -59,7 +59,50 @@ WIN_CSC_LINK=/c/path/devteam-codesign.pfx WIN_CSC_KEY_PASSWORD=... bash packagin
 4. **Patch:** a logic change that is small and covers one concern.
 5. **Upstream PR:** if a patch only adds an option or a hook, send it upstream from the fork and delete the patch once a release includes it.
 
-Leave the internal names alone: `KIROCREW_*` env vars, `~/.kiro/crew`, the `kiro_crew` package and the `kirocrew` command. Renaming them would conflict on every sync.
+Leave the internal names alone: `KIROCREW_*` env vars, the `kiro_crew` package, the in-install `kirocrew` launcher, the MCP server and default-agent id `kirocrew`. Renaming them would conflict on every sync. What DevTeam *publishes* is configured instead (next section).
+
+## Side by side with stock Kiro Crew
+
+Everything DevTeam publishes outside its own install comes from the **Side-by-side install** section of `devteam.conf`. That lets a machine run DevTeam and Kiro Crew together, and it lets a different distribution change these values without touching patches.
+
+| Setting | DevTeam | Upstream | What it controls |
+|---|---|---|---|
+| `CLI_NAME` | `devteam` | `kirocrew` | Command on PATH (`~/.local/bin/devteam`), bundle `bin/devteam[.cmd]`, console script, `--version`, CLI usage. No `kirocrew` is published on PATH. Agents get both names in their private `<home>/kirocrew-bin/`. |
+| `DATA_HOME` | `~/.devteam` | `~/.kiro/crew` | Default data home for the gateway, CLI and desktop app. Exported as `KIROCREW_HOME` at startup, so child processes use it too. The legacy `~/.kirocrew` migration is off. |
+| `GATEWAY_PORT` | `5486` | `5476` | Default dashboard and gateway port. Upstream treats 5476 as a lock, so two products must not share it. |
+| `DEFAULT_AGENT` | `claude` | `kas` | Harness used when `agent.acp_backend` is unset. An explicit choice is kept. |
+| `URL_SCHEME` | `devteam` | `kirocrew` | Desktop deep links. |
+| `SERVICE_NAME` | `devteam` | `kirocrew` | systemd unit, and the launchd label `dev.<name>.gateway`. |
+| `DESKTOP_PACKAGE_NAME` | `devteam-desktop` | `kirocrew-desktop` | Desktop app data folder (`%APPDATA%\devteam-desktop`, `~/.config/devteam-desktop`) and Linux executable. |
+
+How it's applied: patch `0010` makes upstream read these values from `src/kiro_crew/_distribution.py`, `website/electron/distribution.js` and `website/src/distribution.ts`, which hold upstream's values. `scripts/distribution.py` regenerates all three from `devteam.conf` during `prepare.sh`, and updates the packaging metadata to match.
+
+Some state is still shared with stock Kiro Crew:
+
+- A `KIROCREW_HOME` or `KIROCREW_PORT` exported in your shell still wins, for both products.
+- kiro-cli's own `~/.kiro` (agents, settings) is shared. It belongs to kiro-cli, and only the Kiro or KAS backends use it.
+- Existing data isn't migrated. To bring a Kiro Crew setup over, copy `~/.kiro/crew` to `~/.devteam` while both apps are stopped.
+
+## User-visible text
+
+`scripts/rewrite_strings.py` runs at the end of `prepare.sh`. It rewrites only text people read: string literals (never comments, docstrings or identifiers), dashboard catalog values in all 12 languages, HTML pages, the installer and the install scripts.
+
+| What | Becomes | Where it's defined |
+|---|---|---|
+| "Kiro Crew" / "KiroCrew" in prose | `PRODUCT_NAME` | `rebrand/strings-rules.json` |
+| `kirocrew <command>` hints | `CLI_NAME <command>` | `rebrand/strings-rules.json` |
+| Kiro Crew's GitHub repo, issues, discussions, Discord | `REPO_URL` (source and doc links go to `SOURCE_REPO_URL`) | `rebrand/strings-rules.json` |
+| "Kiro" as the assistant's name ("Things Kiro made for you"), and Kiro-branded art names | Neutral wording ("your agent", "built-in Chromium") | `rebrand/i18n-overrides.json`, per key and per language |
+| The installer's "default agent requires Kiro CLI" page and the install scripts | Claude Code and its setup guide, when `DEFAULT_AGENT=claude` | `rewrite_agent_prerequisite()` |
+
+Some text is deliberately left alone:
+
+- **Kiro service text** (Kiro CLI, Kiro sign-in, Kiro credits, KAS). It's accurate for anyone who picks the Kiro backend.
+- **Working service URLs** (the App catalog, Kiro sign-in endpoints, kiro-cli downloads, speech model downloads, the cloud bootstrap's git clone). Changing them would break features.
+- **Links to specific upstream issues and PRs.**
+- **Log messages, `src/kiro_crew/docs/`, and the security and sandbox modules.** The security strings include patterns the checks match on, so rewriting them could weaken a rule.
+
+The overrides record the English text they were written against. If upstream rewords one of those strings, `prepare.sh` fails and names the key, so the translation can be reviewed rather than silently replacing the new text.
 
 ## Editing patches
 

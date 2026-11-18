@@ -1,0 +1,8 @@
+{
+  "_doc": "Catalog keys whose 'Kiro Crew' names the UPSTREAM project as a data recipient (feedback survey -> AWS-hosted Kiro Crew feedback endpoint; install receipts -> Kiro Crew's app catalog). Kept verbatim in every language so the disclosure stays true.",
+  "keys": [
+    "components.sessionPulseSurveyCard.email_disclosure",
+    "privacyDisclosure.installReceiptBody",
+    "privacyDisclosure.installReceiptFields"
+  ]
+}
