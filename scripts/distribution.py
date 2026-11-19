@@ -93,7 +93,7 @@ def rewrite_py(path: Path) -> None:
         if n != 1:
             fail(f"{path}: no '{key} = ' line (did patch 0010 change?)")
         text = new
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="")
 
 
 def js(value) -> str:
@@ -115,6 +115,7 @@ def write_electron(path: Path) -> None:
         f"  URL_SCHEME: {js(scheme)},\n"
         "});\n",
         encoding="utf-8",
+        newline="",
     )
 
 
@@ -134,6 +135,7 @@ def write_ts(path: Path) -> None:
         f"  defaultAcpBackend: {js(agent)},\n"
         "} as const\n",
         encoding="utf-8",
+        newline="",
     )
 
 
@@ -146,7 +148,7 @@ def add_console_script(path: Path, pattern: str, line: str) -> None:
         fail(f"{path}: kirocrew console-script line not found")
     if line not in text:
         text = text[: m.end()] + "\n" + line + text[m.end():]
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="")
 
 
 def edit_electron_package(path: Path) -> None:
@@ -162,7 +164,7 @@ def edit_electron_package(path: Path) -> None:
         fail(f"{path}: unexpected protocols {protocols!r}")
     protocols[0]["name"] = product
     protocols[0]["schemes"] = [scheme]
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="")
 
 
 def edit_lockfile(path: Path) -> None:
@@ -170,14 +172,14 @@ def edit_lockfile(path: Path) -> None:
     data["name"] = desktop_pkg
     if "" in data.get("packages", {}):
         data["packages"][""]["name"] = desktop_pkg
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="")
 
 
 def edit_text(path: Path, old: str, new: str) -> None:
     text = path.read_text(encoding="utf-8")
     if old not in text:
         fail(f"{path}: {old!r} not found")
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    path.write_text(text.replace(old, new), encoding="utf-8", newline="")
 
 
 def widen_security_rules() -> None:
@@ -193,7 +195,7 @@ def widen_security_rules() -> None:
         n = text.count("kiro[-.]?crew")
         if n == 0:
             fail(f"{rel}: no kiro[-.]?crew rule left (upstream changed the self-program rules)")
-        path.write_text(text.replace("kiro[-.]?crew", f"(?:kiro[-.]?crew|{alt})"), encoding="utf-8")
+        path.write_text(text.replace("kiro[-.]?crew", f"(?:kiro[-.]?crew|{alt})"), encoding="utf-8", newline="")
         total += n
     print(f"  security: {total} self-program rule patterns also match `{cli}`")
 

@@ -174,7 +174,7 @@ def rewrite_lines(rel, rules=ALL):
             line = new
         out.append(line)
     if n:
-        path.write_text("".join(out), encoding="utf-8")
+        path.write_text("".join(out), encoding="utf-8", newline="")
     return n
 
 
@@ -240,7 +240,7 @@ def rewrite_catalogs():
                 set_key(data, key, row[target_lang])
         after = json.dumps(data, ensure_ascii=False)
         if after != before:
-            file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="")
             changed += 1
     gen = ROOT / "website/scripts/gen-pseudolocale.mjs"
     if gen.is_file():
@@ -275,7 +275,7 @@ def rewrite_agent_prerequisite():
     if old_link not in text or n < 2:
         sys.exit("rewrite_strings: installer.nsh prerequisite page changed upstream; update rewrite_agent_prerequisite()")
     text = text.replace(old_link, f'!define MUI_FINISHPAGE_LINK_LOCATION "{CLAUDE_SETUP}"')
-    nsh.write_text(text, encoding="utf-8")
+    nsh.write_text(text, encoding="utf-8", newline="")
     n += 1
 
     # Shell installers (pip / curl route): message lines, and setup.sh's presence check.
@@ -311,7 +311,7 @@ def rewrite_agent_prerequisite():
             out.append(new)
         if not changed:
             sys.exit(f"rewrite_strings: {rel}: no default-agent prerequisite text found; update rewrite_agent_prerequisite()")
-        path.write_text("".join(out), encoding="utf-8")
+        path.write_text("".join(out), encoding="utf-8", newline="")
         n += changed
     return n
 
@@ -330,7 +330,7 @@ def main():
           if re.search(r"\.(ts|tsx|js|cjs|mjs|jsx)$", p) and "/node_modules/" not in p
           and not p.startswith(("website/electron/scripts/", "website/src/i18n/locales/")) and not p.endswith(".d.ts")]
     rules_file = ROOT.parent / ".strings-rules.expanded.json"
-    rules_file.write_text(json.dumps(RULES), encoding="utf-8")
+    rules_file.write_text(json.dumps(RULES), encoding="utf-8", newline="")
     r = subprocess.run(["node", str(HERE / "strings/rewrite_js.js"), str(rules_file)],
                        input="\n".join(str(ROOT / p) for p in js), capture_output=True, text=True)
     if r.returncode != 0:
@@ -350,7 +350,7 @@ def main():
     data = json.loads(pkg.read_text(encoding="utf-8"))
     new = map_strings(data, lambda v: rewrite_text(v, NO_CLI))
     if new != data:
-        pkg.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        pkg.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="")
     total["desktop package"] = int(new != data)
     total["catalog files"] = rewrite_catalogs()
     total["agent prerequisite"] = rewrite_agent_prerequisite()

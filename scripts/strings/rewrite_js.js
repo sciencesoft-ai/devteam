@@ -38,7 +38,7 @@ function walk(node, cb) {
 
 let files = 0;
 let edits = 0;
-for (const file of fs.readFileSync(0, "utf8").split("\n").filter(Boolean)) {
+for (const file of fs.readFileSync(0, "utf8").split(/\r?\n/).filter(Boolean)) {
   const src = fs.readFileSync(file, "utf8");
   if (!/kiro/i.test(src)) continue;
   let ast;
