@@ -266,7 +266,9 @@ def rewrite_agent_prerequisite():
     out = []
     for line in lines:
         if line.startswith(("LangString KiroCliPrerequisiteText ", "LangString KiroCliPrerequisiteLink ")):
-            new = line.replace("kiro-cli login", "claude").replace("Kiro CLI", "Claude Code").replace("Kiro", "Claude")
+            # Only the quoted text: the LangString id is referenced elsewhere as $(KiroCli...).
+            head, sep, value = line.partition('"')
+            new = head + sep + value.replace("kiro-cli login", "claude").replace("Kiro CLI", "Claude Code").replace("Kiro", "Claude")
             n += new != line
             line = new
         out.append(line)
