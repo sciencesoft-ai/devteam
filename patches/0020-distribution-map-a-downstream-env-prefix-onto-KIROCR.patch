@@ -1,0 +1,234 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 20 Nov 2026 02:02:36 +0300
+Subject: [PATCH] distribution: map a downstream env prefix onto
+ KIROCREW_HOME/PORT
+
+A distribution installed next to stock Kiro Crew must not pick up a
+KIROCREW_HOME or KIROCREW_PORT exported for that other install. With
+ENV_PREFIX set (DevTeam: DEVTEAM), the first process started from a
+plain shell drops both, copies <prefix>_HOME / <prefix>_PORT into them
+and marks the environment; children inherit the mark and keep trusting
+the KIROCREW_* values their parent hands them. Applied by the package
+on import and by the desktop shell before it resolves its home.
+Upstream (ENV_PREFIX KIROCREW) nothing changes.
+
+diff --git a/src/kiro_crew/__init__.py b/src/kiro_crew/__init__.py
+index 375cf0f7e4db50077344d5165292ddc0ae4acac6..a9a73e7495a8e21fad29c5130a13c5dcbd4df673 100644
+--- a/src/kiro_crew/__init__.py
++++ b/src/kiro_crew/__init__.py
+@@ -8,6 +8,11 @@ import os
+ import re
+ 
+ from kiro_crew import _distribution as _dist
++from kiro_crew import _distribution_env
++
++# A distribution with its own environment prefix reads <prefix>_HOME / <prefix>_PORT
++# instead of a KIROCREW_HOME / KIROCREW_PORT exported for another install.
++_distribution_env.apply_to_process(_dist.ENV_PREFIX)
+ 
+ # A distribution whose data home is not upstream's exports it as KIROCREW_HOME when
+ # nothing set one, so every child process -- MCP servers, cron scripts, skill
+diff --git a/src/kiro_crew/_distribution.py b/src/kiro_crew/_distribution.py
+index 102adc6589d654795426f318646c9b67e517d284..ee1faad4057da4a0238fee1ded360cbd9fecda12 100644
+--- a/src/kiro_crew/_distribution.py
++++ b/src/kiro_crew/_distribution.py
+@@ -31,6 +31,12 @@ RECOVERY_BREADCRUMB_NAME = ".kirocrew.breadcrumb"
+ #: Directory name of the default LLM workspace root.
+ WORKSPACE_DIR_NAME = "kirocrew-workspace"
+ 
++#: Prefix of the environment variables a person sets for this product
++#: (``<prefix>_HOME``, ``<prefix>_PORT``). The code itself reads ``KIROCREW_*``; a
++#: downstream prefix is mapped onto those once, at startup (see ``_distribution_env``),
++#: so a ``KIROCREW_HOME`` exported for another install never reaches this one.
++ENV_PREFIX = "KIROCREW"
++
+ #: Default dashboard / gateway port.
+ DEFAULT_PORT = 5476
+ 
+diff --git a/src/kiro_crew/_distribution_env.py b/src/kiro_crew/_distribution_env.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b3e02a8c7bd68e72d326ec13e44fbeaae8f191f
+--- /dev/null
++++ b/src/kiro_crew/_distribution_env.py
+@@ -0,0 +1,41 @@
++"""Map a downstream distribution's own environment variables onto ``KIROCREW_*``.
++
++Upstream (``ENV_PREFIX == "KIROCREW"``) this does nothing. A distribution with its
++own prefix (DevTeam: ``DEVTEAM``) is usually installed next to stock Kiro Crew, and a
++``KIROCREW_HOME`` or ``KIROCREW_PORT`` in the user's shell belongs to that other
++install. So the first process of this product started from a plain shell drops both,
++copies ``<prefix>_HOME`` / ``<prefix>_PORT`` into them, and marks the environment.
++Every process it starts inherits the mark and trusts ``KIROCREW_*`` as set by its
++parent, which is how the gateway hands a port or home to its own children.
++
++Stdlib-only and import-free: ``kiro_crew/__init__`` runs it while the package loads.
++"""
++
++from __future__ import annotations
++
++import os
++from collections.abc import MutableMapping
++
++_MAPPED = ("HOME", "PORT")
++
++
++def marker(prefix: str) -> str:
++    """Name of the variable that says this environment was already mapped."""
++    return f"{prefix}_ENV_MAPPED"
++
++
++def apply(env: MutableMapping[str, str], prefix: str) -> bool:
++    """Map ``<prefix>_HOME``/``_PORT`` onto ``KIROCREW_*`` once. True when it mapped."""
++    if prefix == "KIROCREW" or env.get(marker(prefix)) == "1":
++        return False
++    for name in _MAPPED:
++        env.pop(f"KIROCREW_{name}", None)
++        value = env.get(f"{prefix}_{name}", "").strip()
++        if value:
++            env[f"KIROCREW_{name}"] = value
++    env[marker(prefix)] = "1"
++    return True
++
++
++def apply_to_process(prefix: str) -> bool:
++    return apply(os.environ, prefix)
+diff --git a/src/kiro_crew/service/common.py b/src/kiro_crew/service/common.py
+index 8df63164eb3a8f52e067112de88f05a53ab8f3f6..ae495c244e4392c0eb04ad2a7f6b6422495f0f9b 100644
+--- a/src/kiro_crew/service/common.py
++++ b/src/kiro_crew/service/common.py
+@@ -274,7 +274,9 @@ def service_environment(home: str) -> "dict[str, str]":
+     # operator believes they set theirs.
+     port = os.environ.get("KIROCREW_PORT", "").strip()
+     if port:
+-        env["KIROCREW_PORT"] = port
++        # Under the variable a service start reads: a downstream prefix maps
++        # <prefix>_PORT onto KIROCREW_PORT and drops an unmapped KIROCREW_PORT.
++        env[f"{_distribution.ENV_PREFIX}_PORT"] = port
+     return env
+ 
+ 
+diff --git a/test/test_distribution_env.py b/test/test_distribution_env.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..34b7a3ce273c9e6e88e5f5fbda880a06f2264e82
+--- /dev/null
++++ b/test/test_distribution_env.py
+@@ -0,0 +1,23 @@
++"""The downstream environment-prefix mapping (``kiro_crew._distribution_env``)."""
++
++from kiro_crew import _distribution_env
++
++
++def test_upstream_prefix_is_a_no_op():
++    env = {"KIROCREW_HOME": "/a", "KIROCREW_PORT": "1"}
++    assert _distribution_env.apply(env, "KIROCREW") is False
++    assert env == {"KIROCREW_HOME": "/a", "KIROCREW_PORT": "1"}
++
++
++def test_own_prefix_replaces_values_exported_for_another_install():
++    env = {"KIROCREW_HOME": "/other", "KIROCREW_PORT": "5476", "DEVTEAM_HOME": "/mine"}
++    assert _distribution_env.apply(env, "DEVTEAM") is True
++    assert env["KIROCREW_HOME"] == "/mine"
++    assert "KIROCREW_PORT" not in env
++    assert env[_distribution_env.marker("DEVTEAM")] == "1"
++
++
++def test_mapped_environment_from_a_parent_is_trusted():
++    env = {"KIROCREW_PORT": "7000", "DEVTEAM_ENV_MAPPED": "1"}
++    assert _distribution_env.apply(env, "DEVTEAM") is False
++    assert env["KIROCREW_PORT"] == "7000"
+diff --git a/website/electron/distribution-env.js b/website/electron/distribution-env.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..6bc34e5aad9738776c80107a0f362724af497c55
+--- /dev/null
++++ b/website/electron/distribution-env.js
+@@ -0,0 +1,25 @@
++"use strict";
++// Mirror of src/kiro_crew/_distribution_env.py for the desktop shell: a
++// distribution with its own ENV_PREFIX reads <prefix>_HOME / <prefix>_PORT, and a
++// KIROCREW_HOME / KIROCREW_PORT exported for another install never reaches it. The
++// mark makes the gateway (a child) trust the KIROCREW_* values this shell hands it.
++// Upstream (ENV_PREFIX "KIROCREW") this is a no-op.
++
++const MAPPED = ["HOME", "PORT"];
++
++function marker(prefix) {
++  return `${prefix}_ENV_MAPPED`;
++}
++
++function applyDistributionEnv(env, prefix) {
++  if (prefix === "KIROCREW" || env[marker(prefix)] === "1") return false;
++  for (const name of MAPPED) {
++    delete env[`KIROCREW_${name}`];
++    const value = String(env[`${prefix}_${name}`] || "").trim();
++    if (value) env[`KIROCREW_${name}`] = value;
++  }
++  env[marker(prefix)] = "1";
++  return true;
++}
++
++module.exports = { applyDistributionEnv, marker };
+diff --git a/website/electron/distribution.js b/website/electron/distribution.js
+index 80e68c39a90f34d33c38682456d88873b172590a..ea19d07a92d505bfc3c449933a620dc6f3851a25 100644
+--- a/website/electron/distribution.js
++++ b/website/electron/distribution.js
+@@ -6,6 +6,7 @@ module.exports = Object.freeze({
+   PRODUCT_NAME: "Kiro Crew",
+   CLI_NAME: "kirocrew",
+   DATA_HOME_PARTS: Object.freeze([".kiro", "crew"]),
++  ENV_PREFIX: "KIROCREW",
+   DEFAULT_PORT: 5476,
+   URL_SCHEME: "kirocrew",
+ });
+diff --git a/website/electron/main.js b/website/electron/main.js
+index 88edf53b869bec3325db10cdcd306f1babecc9c5..b81a6d234a5d66f0dd10b5f4707898af12f252f8 100644
+--- a/website/electron/main.js
++++ b/website/electron/main.js
+@@ -1,3 +1,5 @@
++// Before anything reads KIROCREW_HOME / KIROCREW_PORT (see distribution-env.js).
++require("./distribution-env").applyDistributionEnv(process.env, require("./distribution").ENV_PREFIX);
+ const electron = require("electron");
+ const {
+   app,
+diff --git a/website/electron/package.json b/website/electron/package.json
+index b4b427d25bf99a83c50105e9343558b59aa8b2e4..24894c325de8051f6b3ea50c3b7a806475fe1239 100644
+--- a/website/electron/package.json
++++ b/website/electron/package.json
+@@ -148,6 +148,7 @@
+     "files": [
+       "main.js",
+       "distribution.js",
++      "distribution-env.js",
+       "gateway-supervisor.js",
+       "shell-bundle-watch.js",
+       "runtime/gateway/launch-preflight.js",
+diff --git a/website/electron/test/distribution-env.test.js b/website/electron/test/distribution-env.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce7d57c1206ce388ac8afa9d917ddbac73549fce
+--- /dev/null
++++ b/website/electron/test/distribution-env.test.js
+@@ -0,0 +1,24 @@
++"use strict";
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const { applyDistributionEnv, marker } = require("../distribution-env");
++
++test("upstream prefix leaves the environment alone", () => {
++  const env = { KIROCREW_HOME: "/a", KIROCREW_PORT: "1234" };
++  assert.equal(applyDistributionEnv(env, "KIROCREW"), false);
++  assert.deepEqual(env, { KIROCREW_HOME: "/a", KIROCREW_PORT: "1234" });
++});
++
++test("own prefix replaces another install's KIROCREW_* values", () => {
++  const env = { KIROCREW_HOME: "/other", KIROCREW_PORT: "5476", DEVTEAM_PORT: "6000" };
++  assert.equal(applyDistributionEnv(env, "DEVTEAM"), true);
++  assert.equal(env.KIROCREW_HOME, undefined);
++  assert.equal(env.KIROCREW_PORT, "6000");
++  assert.equal(env[marker("DEVTEAM")], "1");
++});
++
++test("a mapped environment (a child of this product) is trusted as is", () => {
++  const env = { KIROCREW_PORT: "7000", DEVTEAM_ENV_MAPPED: "1" };
++  assert.equal(applyDistributionEnv(env, "DEVTEAM"), false);
++  assert.equal(env.KIROCREW_PORT, "7000");
++});

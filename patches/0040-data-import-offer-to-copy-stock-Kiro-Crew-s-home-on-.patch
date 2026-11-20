@@ -1,0 +1,696 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 20 Nov 2026 02:07:12 +0300
+Subject: [PATCH] data-import: offer to copy stock Kiro Crew's home on first
+ run
+
+A distribution whose data home is not upstream's is usually installed
+next to stock Kiro Crew. On its first run (its own home absent, the
+stock home's config.json present) the CLI, in an interactive terminal,
+and the desktop shell, before the gateway starts, ask once whether to
+copy that home. Import skips the other install's pid, lock and socket
+files and kirocrew-bin/, points dashboard.url at this product's own
+default port, and is refused while the stock gateway answers. Start
+fresh creates the empty home so the question never comes back.
+Upstream never asks.
+
+diff --git a/src/kiro_crew/cli.py b/src/kiro_crew/cli.py
+index a6f007397a995f599621772ef95edea585992686..5e3832cac95257d6c72151d06230875235f44273 100644
+--- a/src/kiro_crew/cli.py
++++ b/src/kiro_crew/cli.py
+@@ -661,6 +661,12 @@ def main() -> None:
+         print(_refusal, file=sys.stderr)
+         sys.exit(1)
+ 
++    # First run of a downstream distribution next to stock Kiro Crew: offer to copy
++    # its data home over. Before project detection, which creates the home.
++    from kiro_crew import data_import
++
++    data_import.offer_in_terminal()
++
+     if not os.environ.get("KIROCREW_PROJECT_DIR"):
+         detected = _detect_project_dir()
+         if detected:
+diff --git a/src/kiro_crew/data_import.py b/src/kiro_crew/data_import.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..37d7ad4217eaea858d42a1392ce19b44b0c4c9d1
+--- /dev/null
++++ b/src/kiro_crew/data_import.py
+@@ -0,0 +1,202 @@
++"""Offer, once, to import stock Kiro Crew's data home into a downstream one.
++
++Only for a distribution whose data home is not upstream's (DevTeam: ``~/.devteam``),
++which is usually installed next to stock Kiro Crew. On the first run -- this
++product's default home does not exist yet and ``~/.kiro/crew/config.json`` does --
++the CLI (in an interactive terminal) and the desktop shell
++(``website/electron/data-import.js``) ask whether to copy that home over.
++
++- **Import** copies the whole home except the other install's runtime files (pid,
++  lock and socket files, and ``kirocrew-bin/``, whose links point into the other
++  install), points ``dashboard.url`` at this product's own default port so the two
++  never fight over one, and publishes the copy with one rename.
++- **Start fresh** creates the empty home, so the question is never asked again.
++
++Copying a home a running gateway is writing to could catch its databases mid-write,
++so an import is refused while the source gateway answers on its port.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import shutil
++import socket
++import sys
++import time
++from collections.abc import Callable, Mapping
++from pathlib import Path
++from urllib.parse import urlsplit, urlunsplit
++
++from kiro_crew import _distribution
++
++SOURCE_NAME = "Kiro Crew"
++SOURCE_HOME_PARTS = (".kiro", "crew")
++SOURCE_DEFAULT_PORT = 5476
++SKIP_NAMES = frozenset({"kirocrew-bin"})
++SKIP_SUFFIXES = (".pid", ".lock", ".sock")
++_HOME_MODE = 0o777 if sys.platform == "win32" else 0o700
++
++
++def source_home() -> Path:
++    return Path.home().joinpath(*SOURCE_HOME_PARTS)
++
++
++def target_home() -> Path:
++    return Path.home().joinpath(*_distribution.DATA_HOME_PARTS)
++
++
++def should_offer(env: Mapping[str, str] = os.environ) -> bool:
++    """True on this distribution's first run with a stock Kiro Crew home present."""
++    if tuple(_distribution.DATA_HOME_PARTS) == SOURCE_HOME_PARTS:
++        return False
++    target = target_home()
++    raw = env.get("KIROCREW_HOME")
++    try:
++        # A home the person chose elsewhere (<prefix>_HOME) is theirs to fill.
++        if raw and Path(raw).expanduser().resolve() != target.resolve():
++            return False
++        return not target.exists() and (source_home() / "config.json").is_file()
++    except (OSError, RuntimeError):
++        return False
++
++
++def _configured_port(home: Path) -> int | None:
++    try:
++        data = json.loads((home / "config.json").read_text(encoding="utf-8"))
++        url = (data.get("dashboard") or {}).get("url") or ""
++        return urlsplit(url).port
++    except (OSError, ValueError, AttributeError):
++        return None
++
++
++def source_running(timeout: float = 0.3) -> bool:
++    """True when a gateway answers on the source home's port."""
++    ports = {SOURCE_DEFAULT_PORT, _configured_port(source_home())}
++    for port in sorted(p for p in ports if p):
++        try:
++            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
++                return True
++        except OSError:
++            continue
++    return False
++
++
++def _ignore(directory: str, names: list[str]) -> set[str]:
++    return {n for n in names if n in SKIP_NAMES or n.endswith(SKIP_SUFFIXES)}
++
++
++def _repoint_dashboard_url(home: Path) -> None:
++    """Point an imported ``dashboard.url`` at this product's default port."""
++    path = home / "config.json"
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return
++    dashboard = data.get("dashboard") if isinstance(data, dict) else None
++    url = dashboard.get("url") if isinstance(dashboard, dict) else None
++    if not isinstance(url, str) or not url:
++        return
++    parts = urlsplit(url)
++    if parts.port is None or parts.port == _distribution.DEFAULT_PORT:
++        return
++    host = parts.hostname or "localhost"
++    netloc = f"[{host}]" if ":" in host else host
++    dashboard["url"] = urlunsplit(parts._replace(netloc=f"{netloc}:{_distribution.DEFAULT_PORT}"))
++    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
++
++
++# On Windows a just-written file can stay open for a moment (an antivirus scan
++# of the copied executables, the search indexer), so renaming or deleting the
++# folder that holds it raises PermissionError until the scan ends.
++_LOCK_RETRY_SECONDS = 30.0
++
++
++def _when_unlocked(
++    action: Callable[[], None],
++    *,
++    done: Callable[[], bool] = lambda: False,
++    platform: str = sys.platform,
++    retry_seconds: float = _LOCK_RETRY_SECONDS,
++    sleep: Callable[[float], None] = time.sleep,
++    clock: Callable[[], float] = time.monotonic,
++) -> None:
++    """Run *action*, retrying a transient Windows lock until *retry_seconds* pass.
++
++    *done* reports a state where retrying cannot help (the rename target exists).
++    """
++    deadline = clock() + retry_seconds
++    delay = 0.1
++    while True:
++        try:
++            action()
++            return
++        except PermissionError:
++            if platform != "win32" or done() or clock() + delay > deadline:
++                raise
++        sleep(delay)
++        delay = min(delay * 2, 2.0)
++
++
++def _remove_tree(path: Path) -> None:
++    if path.exists():
++        _when_unlocked(lambda: shutil.rmtree(path))
++
++
++def import_home() -> Path:
++    """Copy the source home into the (absent) target home. Raises OSError on failure."""
++    source, target = source_home(), target_home()
++    staging = target.with_name(target.name + ".importing")
++    _remove_tree(staging)
++    target.parent.mkdir(parents=True, exist_ok=True)
++    try:
++        shutil.copytree(source, staging, symlinks=True, ignore=_ignore)
++        _repoint_dashboard_url(staging)
++        _when_unlocked(lambda: os.replace(staging, target), done=target.exists)
++    except BaseException:
++        # Report why the import failed, not why the cleanup after it did.
++        try:
++            _remove_tree(staging)
++        except OSError:
++            pass
++        raise
++    return target
++
++
++def start_fresh() -> Path:
++    target = target_home()
++    target.mkdir(parents=True, exist_ok=True, mode=_HOME_MODE)
++    return target
++
++
++def offer_in_terminal(
++    *,
++    ask: Callable[[str], str] = input,
++    out: Callable[[str], None] = print,
++    interactive: bool | None = None,
++) -> str:
++    """Ask in an interactive terminal. Returns imported | fresh | deferred | skipped."""
++    if interactive is None:
++        interactive = sys.stdin.isatty() and sys.stdout.isatty()
++    if not interactive or not should_offer():
++        return "skipped"
++    product = _distribution.PRODUCT_NAME
++    out(f"{SOURCE_NAME} data was found at {source_home()}.")
++    try:
++        answer = ask(f"Import it into {target_home()} for {product}? [y/N] ").strip().lower()
++    except EOFError:
++        answer = ""
++    if answer not in ("y", "yes"):
++        start_fresh()
++        out(f"Starting {product} with no imported data.")
++        return "fresh"
++    if source_running():
++        out(f"{SOURCE_NAME} is running. Stop it, then run this command again to import.")
++        return "deferred"
++    try:
++        target = import_home()
++    except OSError as exc:
++        out(f"Import failed ({exc}). Nothing was changed; run this command again to retry.")
++        return "deferred"
++    out(f"Imported into {target}.")
++    return "imported"
+diff --git a/test/test_data_import.py b/test/test_data_import.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..99e63ff69c56b1e45d48da6c5af45b7796cb0ae6
+--- /dev/null
++++ b/test/test_data_import.py
+@@ -0,0 +1,115 @@
++"""First-run import of a stock Kiro Crew home (``kiro_crew.data_import``)."""
++
++import json
++
++import pytest
++
++from kiro_crew import _distribution, data_import
++
++
++@pytest.fixture
++def homes(tmp_path, monkeypatch):
++    monkeypatch.setattr(data_import.Path, "home", classmethod(lambda cls: tmp_path))
++    monkeypatch.setattr(_distribution, "DATA_HOME_PARTS", (".devteam",))
++    monkeypatch.setattr(_distribution, "DEFAULT_PORT", 5486)
++    monkeypatch.delenv("KIROCREW_HOME", raising=False)
++    monkeypatch.setattr(data_import, "source_running", lambda timeout=0.3: False)
++    source = tmp_path / ".kiro" / "crew"
++    source.mkdir(parents=True)
++    (source / "config.json").write_text(json.dumps({"dashboard": {"url": "http://localhost:5476"}}))
++    (source / "gateway.pid").write_text("1")
++    (source / "kirocrew-bin").mkdir()
++    (source / "history").mkdir()
++    (source / "history" / "a.jsonl").write_text("{}")
++    return source, tmp_path / ".devteam"
++
++
++def test_offered_only_on_first_run(homes):
++    source, target = homes
++    assert data_import.should_offer({})
++    assert not data_import.should_offer({"KIROCREW_HOME": str(target.parent / "elsewhere")})
++    target.mkdir()
++    assert not data_import.should_offer({})
++
++
++def test_not_offered_upstream(homes, monkeypatch):
++    monkeypatch.setattr(_distribution, "DATA_HOME_PARTS", (".kiro", "crew"))
++    assert not data_import.should_offer({})
++
++
++def test_yes_copies_the_home_without_runtime_files(homes):
++    source, target = homes
++    result = data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True)
++    assert result == "imported"
++    assert (target / "history" / "a.jsonl").is_file()
++    assert not (target / "gateway.pid").exists()
++    assert not (target / "kirocrew-bin").exists()
++    url = json.loads((target / "config.json").read_text())["dashboard"]["url"]
++    assert url == "http://localhost:5486"
++    assert (source / "config.json").is_file()
++
++
++def test_no_starts_fresh_and_is_not_asked_again(homes):
++    _, target = homes
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "", out=lambda _: None, interactive=True)
++        == "fresh"
++    )
++    assert target.is_dir() and not any(target.iterdir())
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True)
++        == "skipped"
++    )
++
++
++def test_running_source_defers(homes, monkeypatch):
++    _, target = homes
++    monkeypatch.setattr(data_import, "source_running", lambda timeout=0.3: True)
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True)
++        == "deferred"
++    )
++    assert not target.exists()
++
++
++def test_non_interactive_never_asks(homes):
++    def boom(_):
++        raise AssertionError("asked")
++
++    assert (
++        data_import.offer_in_terminal(ask=boom, out=lambda _: None, interactive=False) == "skipped"
++    )
++
++
++class _Locked:
++    def __init__(self, failures: int) -> None:
++        self.failures = failures
++        self.calls = 0
++
++    def __call__(self) -> None:
++        self.calls += 1
++        if self.calls <= self.failures:
++            raise PermissionError(13, "Permission denied")
++
++
++def test_rename_retries_a_folder_a_windows_scan_holds_open():
++    action = _Locked(3)
++    data_import._when_unlocked(action, platform="win32", sleep=lambda _s: None)
++    assert action.calls == 4
++
++
++def test_rename_gives_up_once_the_retry_window_is_spent():
++    action = _Locked(10**6)
++    with pytest.raises(PermissionError):
++        data_import._when_unlocked(action, platform="win32", retry_seconds=0, sleep=lambda _s: None)
++    assert action.calls == 1
++
++
++@pytest.mark.parametrize(("platform", "target_exists"), [("linux", False), ("win32", True)])
++def test_rename_is_not_retried_off_windows_or_onto_an_existing_target(platform, target_exists):
++    action = _Locked(10**6)
++    with pytest.raises(PermissionError):
++        data_import._when_unlocked(
++            action, done=lambda: target_exists, platform=platform, sleep=lambda _s: None
++        )
++    assert action.calls == 1
+diff --git a/website/electron/data-import.js b/website/electron/data-import.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..12e7e375e242522490cc72dd19b435f57dfb8995
+--- /dev/null
++++ b/website/electron/data-import.js
+@@ -0,0 +1,203 @@
++"use strict";
++// Desktop half of src/kiro_crew/data_import.py: on a downstream distribution's
++// first run, with stock Kiro Crew's home present, ask once whether to copy it.
++// "Import" copies everything except the other install's runtime files and points
++// dashboard.url at this product's own default port; "Start fresh" creates the
++// empty home so the question never comes back. Upstream this never asks.
++
++const nodeFs = require("fs");
++const nodeNet = require("net");
++const nodeOs = require("os");
++const nodePath = require("path");
++const DISTRIBUTION = require("./distribution");
++const { defaultedPort } = require("./gateway-auth-hint");
++
++const SOURCE_NAME = "Kiro Crew";
++const SOURCE_HOME_PARTS = [".kiro", "crew"];
++const SOURCE_DEFAULT_PORT = 5476;
++const SKIP_NAMES = new Set(["kirocrew-bin"]);
++const SKIP_SUFFIXES = [".pid", ".lock", ".sock"];
++
++function homes({ os = nodeOs, path = nodePath } = {}) {
++  return {
++    source: path.join(os.homedir(), ...SOURCE_HOME_PARTS),
++    target: path.join(os.homedir(), ...DISTRIBUTION.DATA_HOME_PARTS),
++  };
++}
++
++function shouldOffer({ env = process.env, fs = nodeFs, os = nodeOs, path = nodePath } = {}) {
++  if (DISTRIBUTION.DATA_HOME_PARTS.join("/") === SOURCE_HOME_PARTS.join("/")) return false;
++  const { source, target } = homes({ os, path });
++  // A home the person chose elsewhere (<prefix>_HOME) is theirs to fill.
++  if (env.KIROCREW_HOME && path.resolve(env.KIROCREW_HOME) !== path.resolve(target)) return false;
++  return !fs.existsSync(target) && fs.existsSync(path.join(source, "config.json"));
++}
++
++function configuredPort(home, { fs = nodeFs, path = nodePath } = {}) {
++  try {
++    const data = JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8"));
++    const port = Number(defaultedPort(data.dashboard.url));
++    return Number.isInteger(port) && port > 0 ? port : null;
++  } catch {
++    return null;
++  }
++}
++
++function portAnswers(port, timeoutMs = 300, net = nodeNet) {
++  return new Promise((resolve) => {
++    const socket = net.connect({ host: "127.0.0.1", port });
++    const done = (answer) => { socket.destroy(); resolve(answer); };
++    socket.setTimeout(timeoutMs, () => done(false));
++    socket.once("connect", () => done(true));
++    socket.once("error", () => done(false));
++  });
++}
++
++async function sourceRunning(deps = {}) {
++  const { source } = homes(deps);
++  const ports = new Set([SOURCE_DEFAULT_PORT, configuredPort(source, deps)].filter(Boolean));
++  for (const port of ports) {
++    if (await portAnswers(port)) return true;
++  }
++  return false;
++}
++
++function repointDashboardUrl(home, { fs = nodeFs, path = nodePath } = {}) {
++  const file = path.join(home, "config.json");
++  let data;
++  try {
++    data = JSON.parse(fs.readFileSync(file, "utf8"));
++  } catch {
++    return;
++  }
++  const dashboard = data && data.dashboard;
++  if (!dashboard || typeof dashboard.url !== "string" || !dashboard.url) return;
++  let url;
++  try {
++    url = new URL(dashboard.url);
++  } catch {
++    return;
++  }
++  if (!url.port || Number(url.port) === DISTRIBUTION.DEFAULT_PORT) return;
++  url.port = String(DISTRIBUTION.DEFAULT_PORT);
++  dashboard.url = url.toString().replace(/\/$/, dashboard.url.endsWith("/") ? "/" : "");
++  fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
++}
++
++// On Windows a just-written file can stay open for a moment (an antivirus scan
++// of the copied executables, the search indexer), so renaming or deleting the
++// folder that holds it fails with EPERM, EACCES or EBUSY until the scan ends.
++const TRANSIENT_LOCK_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
++const LOCK_RETRY_MS = 30000;
++const RM_OPTIONS = { recursive: true, force: true, maxRetries: 10, retryDelay: 200 };
++
++async function renameWhenUnlocked(from, to, {
++  fs = nodeFs,
++  platform = process.platform,
++  retryMs = LOCK_RETRY_MS,
++  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
++} = {}) {
++  const deadline = Date.now() + retryMs;
++  for (let delay = 100; ; delay = Math.min(delay * 2, 2000)) {
++    try {
++      await fs.promises.rename(from, to);
++      return;
++    } catch (error) {
++      const transient = platform === "win32" && TRANSIENT_LOCK_CODES.has(error && error.code);
++      if (!transient || fs.existsSync(to) || Date.now() + delay > deadline) throw error;
++      await wait(delay);
++    }
++  }
++}
++
++async function importHome(deps = {}) {
++  const { fs = nodeFs, path = nodePath } = deps;
++  const { source, target } = homes(deps);
++  const staging = target + ".importing";
++  await fs.promises.rm(staging, RM_OPTIONS);
++  fs.mkdirSync(path.dirname(target), { recursive: true });
++  try {
++    await fs.promises.cp(source, staging, {
++      recursive: true,
++      verbatimSymlinks: true,
++      filter: (src) => {
++        const name = path.basename(src);
++        return !SKIP_NAMES.has(name) && !SKIP_SUFFIXES.some((s) => name.endsWith(s));
++      },
++    });
++    repointDashboardUrl(staging, deps);
++    await renameWhenUnlocked(staging, target, deps);
++  } catch (error) {
++    // Report why the import failed, not why the cleanup after it did.
++    await fs.promises.rm(staging, RM_OPTIONS).catch(() => {});
++    throw error;
++  }
++  return target;
++}
++
++function startFresh(deps = {}) {
++  const { fs = nodeFs } = deps;
++  const { target } = homes(deps);
++  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
++  return target;
++}
++
++/**
++ * Ask with native dialogs. Resolves to imported | fresh | failed | skipped.
++ * @param {{dialog: object, log?: (m: string) => void}} options
++ */
++async function offerDataImport({ dialog, log = () => {}, deps = {} }) {
++  if (!shouldOffer(deps)) return "skipped";
++  const product = DISTRIBUTION.PRODUCT_NAME;
++  const { source, target } = homes(deps);
++  const first = await dialog.showMessageBox({
++    type: "question",
++    buttons: ["Import", "Start fresh"],
++    defaultId: 0,
++    cancelId: 1,
++    noLink: true,
++    message: `Import your ${SOURCE_NAME} data?`,
++    detail: `${SOURCE_NAME} data was found at ${source}. ${product} can copy it to ${target}. `
++      + `${SOURCE_NAME} keeps its own copy.`,
++  });
++  if (first.response !== 0) {
++    startFresh(deps);
++    log("data-import: start fresh");
++    return "fresh";
++  }
++  while (await sourceRunning(deps)) {
++    const retry = await dialog.showMessageBox({
++      type: "warning",
++      buttons: ["Try again", "Start fresh"],
++      defaultId: 0,
++      cancelId: 1,
++      noLink: true,
++      message: `Quit ${SOURCE_NAME} first`,
++      detail: `${SOURCE_NAME} is running. Quit it so its data can be copied safely, then choose Try again.`,
++    });
++    if (retry.response !== 0) {
++      startFresh(deps);
++      log("data-import: start fresh (source running)");
++      return "fresh";
++    }
++  }
++  try {
++    await importHome(deps);
++    log("data-import: imported " + source);
++    return "imported";
++  } catch (error) {
++    log("data-import: failed: " + (error && error.message));
++    await dialog.showMessageBox({
++      type: "error",
++      buttons: ["OK"],
++      message: "Import failed",
++      detail: `${(error && error.message) || error}. ${product} starts with no imported data. To import later, `
++        + `quit both apps and copy ${source} to ${target}.`,
++    });
++    return "failed";
++  }
++}
++
++module.exports = {
++  offerDataImport, shouldOffer, importHome, startFresh, repointDashboardUrl, sourceRunning, renameWhenUnlocked,
++};
+diff --git a/website/electron/main.js b/website/electron/main.js
+index b81a6d234a5d66f0dd10b5f4707898af12f252f8..4e31b68f29f5055e07686b4db5d7ad9c1fe676de 100644
+--- a/website/electron/main.js
++++ b/website/electron/main.js
+@@ -775,6 +775,14 @@ app.whenReady().then(async () => {
+ 
+   await offerRelocationIfUnupdatable();
+ 
++  // First run next to stock Kiro Crew: offer to copy its data home, before the
++  // gateway creates this product's own (see data-import.js).
++  try {
++    await require("./data-import").offerDataImport({ dialog, log: glog });
++  } catch (error) {
++    glog("data-import: " + (error && error.message));
++  }
++
+   // Security and every non-update bridge are installed before the first
+   // dashboard or untrusted browser WebContents can be created.
+   ipcRegistrar.registerShell();
+diff --git a/website/electron/package.json b/website/electron/package.json
+index 24894c325de8051f6b3ea50c3b7a806475fe1239..b09455f9e52c87aa94e510dcb5a6793240c2426d 100644
+--- a/website/electron/package.json
++++ b/website/electron/package.json
+@@ -149,6 +149,7 @@
+       "main.js",
+       "distribution.js",
+       "distribution-env.js",
++      "data-import.js",
+       "gateway-supervisor.js",
+       "shell-bundle-watch.js",
+       "runtime/gateway/launch-preflight.js",
+diff --git a/website/electron/test/data-import.test.js b/website/electron/test/data-import.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..2aeef7cfbbb8559d02b7f6b4a88e402c811c91df
+--- /dev/null
++++ b/website/electron/test/data-import.test.js
+@@ -0,0 +1,88 @@
++"use strict";
++const { describe, it, beforeEach, afterEach } = require("node:test");
++const assert = require("node:assert/strict");
++const fs = require("fs");
++const os = require("os");
++const path = require("path");
++const DISTRIBUTION = require("../distribution");
++const { shouldOffer, importHome, startFresh, renameWhenUnlocked } = require("../data-import");
++
++const upstream = DISTRIBUTION.DATA_HOME_PARTS.join("/") === ".kiro/crew";
++
++describe("data-import", { skip: upstream && "upstream build never offers an import" }, () => {
++  let root;
++  let deps;
++  beforeEach(() => {
++    root = fs.mkdtempSync(path.join(os.tmpdir(), "data-import-"));
++    deps = { env: {}, os: { homedir: () => root } };
++    const source = path.join(root, ".kiro", "crew");
++    fs.mkdirSync(path.join(source, "kirocrew-bin"), { recursive: true });
++    fs.mkdirSync(path.join(source, "history"));
++    fs.writeFileSync(path.join(source, "config.json"), JSON.stringify({ dashboard: { url: "http://localhost:5476" } }));
++    fs.writeFileSync(path.join(source, "gateway.pid"), "1");
++    fs.writeFileSync(path.join(source, "history", "a.jsonl"), "{}");
++  });
++  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
++
++  it("offers only while this product's home is absent", () => {
++    assert.equal(shouldOffer(deps), true);
++    startFresh(deps);
++    assert.equal(shouldOffer(deps), false);
++  });
++
++  it("copies the home without runtime files and moves the port", async () => {
++    const target = await importHome(deps);
++    assert.ok(fs.existsSync(path.join(target, "history", "a.jsonl")));
++    assert.ok(!fs.existsSync(path.join(target, "gateway.pid")));
++    assert.ok(!fs.existsSync(path.join(target, "kirocrew-bin")));
++    const url = JSON.parse(fs.readFileSync(path.join(target, "config.json"), "utf8")).dashboard.url;
++    assert.equal(url, `http://localhost:${DISTRIBUTION.DEFAULT_PORT}`);
++  });
++});
++
++describe("data-import rename", () => {
++  const locked = () => Object.assign(new Error("EPERM, Permission denied"), { code: "EPERM" });
++  const fakeFs = (failures, { targetExists = false } = {}) => {
++    const calls = [];
++    return {
++      calls,
++      existsSync: () => targetExists,
++      promises: {
++        rename: async (from, to) => {
++          calls.push([from, to]);
++          if (calls.length <= failures) throw locked();
++        },
++      },
++    };
++  };
++  const noWait = async () => {};
++
++  it("retries a folder a Windows scan still holds open", async () => {
++    const fs = fakeFs(3);
++    await renameWhenUnlocked("a", "b", { fs, platform: "win32", wait: noWait });
++    assert.equal(fs.calls.length, 4);
++  });
++
++  it("gives up once the retry window is spent", async () => {
++    const fs = fakeFs(Infinity);
++    await assert.rejects(
++      renameWhenUnlocked("a", "b", { fs, platform: "win32", retryMs: 0, wait: noWait }),
++      { code: "EPERM" },
++    );
++    assert.equal(fs.calls.length, 1);
++  });
++
++  it("does not retry off Windows or onto an existing target", async () => {
++    for (const [platform, targetExists] of [["linux", false], ["win32", true]]) {
++      const fs = fakeFs(Infinity, { targetExists });
++      await assert.rejects(renameWhenUnlocked("a", "b", { fs, platform, wait: noWait }), { code: "EPERM" });
++      assert.equal(fs.calls.length, 1);
++    }
++  });
++});
++
++describe("data-import upstream", () => {
++  it("never offers when the data home is upstream's", { skip: !upstream }, () => {
++    assert.equal(shouldOffer({ env: {} }), false);
++  });
++});

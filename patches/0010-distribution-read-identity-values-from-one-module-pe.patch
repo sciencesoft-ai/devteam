@@ -1,0 +1,935 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: DevTeam <devteam@localhost>
+Date: Wed, 18 Nov 2026 23:03:18 +0000
+Subject: [PATCH] distribution: read identity values from one module per
+ surface
+
+Adds src/kiro_crew/_distribution.py, website/electron/distribution.js and
+website/src/distribution.ts, holding upstream's values, and points every
+site that hard-codes one of them there:
+
+- default data home (~/.kiro/crew), legacy home, breadcrumb, workspace dir
+- default gateway/dashboard port (5476)
+- default harness for a config with no agent.acp_backend (KAS)
+- published command name (PATH link, agents' private link, --version,
+  CLI usage) and its recognition by the security vocabulary
+- deep-link URL scheme, systemd unit / launchd label, desktop package names
+- desktop shell: home dir, default port, window title; dashboard: default
+  harness and {{productName}}
+
+With upstream values the build behaves as before. A downstream
+distribution regenerates the three modules (DevTeam: scripts/distribution.py)
+instead of patching each site. A non-upstream data home is exported as
+KIROCREW_HOME at startup so child processes resolve the same home.
+
+diff --git a/packaging/build-desktop.sh b/packaging/build-desktop.sh
+index aba097e7bf8ff98910010f7498745d5034ccc72f..f89d82727303ba78650286aa4938a5822fef1ce0 100644
+--- a/packaging/build-desktop.sh
++++ b/packaging/build-desktop.sh
+@@ -44,6 +44,9 @@
+ set -euo pipefail
+ 
+ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++# Command name a downstream distribution publishes (src/kiro_crew/_distribution.py).
++DIST_CLI_NAME="$(sed -n 's/^CLI_NAME = "\(.*\)"$/\1/p' "$ROOT/src/kiro_crew/_distribution.py")"
++DIST_CLI_NAME="${DIST_CLI_NAME:-kirocrew}"
+ cd "$ROOT"
+ 
+ # The backend bytecode steps (bytecode_coverage_gate, precompile_macos_backend).
+@@ -668,6 +671,10 @@ unset PYTHONPATH PYTHONHOME
+ exec "$DIR/python3.12" -s -P -m kiro_crew "$@"
+ LAUNCH
+   chmod +x "$out/bin/kirocrew"
++  # The distribution's command name: a copy of the same relocatable launcher.
++  if [ "$DIST_CLI_NAME" != kirocrew ]; then
++    cp "$out/bin/kirocrew" "$out/bin/$DIST_CLI_NAME" && chmod +x "$out/bin/$DIST_CLI_NAME"
++  fi
+ 
+   # Arch gate: the bundled interpreter must be the arch this tree claims to be
+   # (a mismatch ships an app whose backend crashes at launch on the other arch).
+@@ -823,6 +830,7 @@ build_backend_windows() {
+   # interactive cmd window keeps their own PYTHONPATH afterwards.
+   mkdir -p "$out/bin"
+   printf '@echo off\r\nsetlocal\r\nset "PYTHONPATH="\r\nset "PYTHONHOME="\r\n"%%~dp0..\\python.exe" -s -P -m kiro_crew %%*\r\n' > "$out/bin/kirocrew.cmd"
++  if [ "$DIST_CLI_NAME" != kirocrew ]; then cp "$out/bin/kirocrew.cmd" "$out/bin/$DIST_CLI_NAME.cmd"; fi
+   # pip also dropped Scripts\kirocrew.exe, whose embedded shebang is THIS build
+   # machine's absolute python.exe path, so it dies with "Fatal error in
+   # launcher" once the bundle is installed anywhere else. Replace it
+@@ -830,6 +838,7 @@ build_backend_windows() {
+   # root like bin\, so "%~dp0..\python.exe" resolves the same interpreter.
+   rm -f "$out/Scripts/kirocrew.exe" "$out/Scripts/kirocrew-script.py"
+   printf '@echo off\r\nsetlocal\r\nset "PYTHONPATH="\r\nset "PYTHONHOME="\r\n"%%~dp0..\\python.exe" -s -P -m kiro_crew %%*\r\n' > "$out/Scripts/kirocrew.cmd"
++  if [ "$DIST_CLI_NAME" != kirocrew ]; then cp "$out/Scripts/kirocrew.cmd" "$out/Scripts/$DIST_CLI_NAME.cmd"; fi
+   # Every other pip console script in Scripts\ (httpx, pwcpp, tqdm, ...) has
+   # the same frozen shebang, and env.py puts Scripts\ on every agent's PATH.
+   # Turn each into a relocatable <name>.cmd; native uv.exe is left alone.
+diff --git a/src/kiro_crew/__init__.py b/src/kiro_crew/__init__.py
+index 0be9a74abc0324aeeb003fd6610b01c6137752a5..375cf0f7e4db50077344d5165292ddc0ae4acac6 100644
+--- a/src/kiro_crew/__init__.py
++++ b/src/kiro_crew/__init__.py
+@@ -7,6 +7,15 @@ import logging
+ import os
+ import re
+ 
++from kiro_crew import _distribution as _dist
++
++# A distribution whose data home is not upstream's exports it as KIROCREW_HOME when
++# nothing set one, so every child process -- MCP servers, cron scripts, skill
++# scripts that fall back to a literal default -- resolves the same home. Upstream
++# leaves the variable alone; its desktop shell already sets it for the gateway.
++if tuple(_dist.DATA_HOME_PARTS) != (".kiro", "crew") and not os.environ.get("KIROCREW_HOME"):
++    os.environ["KIROCREW_HOME"] = os.path.join(os.path.expanduser("~"), *_dist.DATA_HOME_PARTS)
++
+ __version__ = "0.12.2"
+ 
+ # A distribution that repackages one core release as several builds of its own
+@@ -164,8 +173,8 @@ def version_line(package_dir: "str | None" = None) -> str:
+     if package_dir is None:
+         package_dir = os.path.dirname(__file__ or "")
+     if _runs_from_source_checkout(package_dir):
+-        return f"kirocrew {__version__} {SOURCE_CHECKOUT_NOTE}"
+-    return f"kirocrew {__version__}"
++        return f"{_dist.CLI_NAME} {__version__} {SOURCE_CHECKOUT_NOTE}"
++    return f"{_dist.CLI_NAME} {__version__}"
+ 
+ 
+ class _LazyShutdownEvent:
+diff --git a/src/kiro_crew/_distribution.py b/src/kiro_crew/_distribution.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..102adc6589d654795426f318646c9b67e517d284
+--- /dev/null
++++ b/src/kiro_crew/_distribution.py
+@@ -0,0 +1,48 @@
++"""Distribution identity: the values a downstream rebuild of this product may change.
++
++These are the upstream values. A downstream distribution regenerates this file at
++build time instead of patching each place a value is used (DevTeam generates it from
++``devteam.conf`` with ``scripts/distribution.py``). The Electron shell
++(``website/electron/distribution.js``) and the dashboard (``website/src/distribution.ts``)
++carry the same values and are regenerated together with this file.
++
++Stdlib-free and import-free on purpose: ``kiro_crew/__init__``, ``config.paths`` and
++the security vocabulary import it while the package is still loading.
++"""
++
++#: Display name of the product.
++PRODUCT_NAME = "Kiro Crew"
++
++#: Name of the command this install publishes on PATH (``~/.local/bin/<name>``) and
++#: links into the data home's private bin directory for agents. The in-install
++#: launcher (``bin/kirocrew``, the ``kirocrew`` console script) keeps its name.
++CLI_NAME = "kirocrew"
++
++#: The default data home, as path segments under the user's home directory.
++DATA_HOME_PARTS = (".kiro", "crew")
++
++#: The pre-move top-level home this build migrates from. A downstream build points it
++#: at a name that never exists so it can never adopt another product's data.
++LEGACY_HOME_NAME = ".kirocrew"
++
++#: Recovery pointer written beside the data home (see ``config.paths``).
++RECOVERY_BREADCRUMB_NAME = ".kirocrew.breadcrumb"
++
++#: Directory name of the default LLM workspace root.
++WORKSPACE_DIR_NAME = "kirocrew-workspace"
++
++#: Default dashboard / gateway port.
++DEFAULT_PORT = 5476
++
++#: Runtime id of the harness a config with no ``agent.acp_backend`` choice runs.
++DEFAULT_ACP_BACKEND = "kas"
++
++#: URL scheme of desktop deep links (``<scheme>://...``).
++URL_SCHEME = "kirocrew"
++
++#: systemd unit name and launchd label of the background gateway service.
++SERVICE_NAME = "kirocrew"
++LAUNCHD_LABEL = "dev.kirocrew.gateway"
++
++#: npm package names of the desktop app (stable, nightly).
++DESKTOP_PACKAGE_NAMES = ("kirocrew-desktop", "kirocrew-desktop-nightly")
+diff --git a/src/kiro_crew/acp/kas_prompt_paths.py b/src/kiro_crew/acp/kas_prompt_paths.py
+index 75672026f060334b5105a3fff518323ef76f3edf..a109194fd10b29450b47b1f4f66bdd431d914145 100644
+--- a/src/kiro_crew/acp/kas_prompt_paths.py
++++ b/src/kiro_crew/acp/kas_prompt_paths.py
+@@ -58,9 +58,9 @@ def _anchors(paths: list[Path]) -> set[str]:
+ 
+ def _data_homes() -> set[str]:
+     """The data home as configured and at its default."""
+-    from kiro_crew.config.paths import CONFIG_DIR_LEAF, KIRO_BASE_DIR_NAME, config_dir
++    from kiro_crew.config.paths import DATA_HOME_PARTS, config_dir
+ 
+-    return _anchors([Path.home() / KIRO_BASE_DIR_NAME / CONFIG_DIR_LEAF, config_dir()])
++    return _anchors([Path.home().joinpath(*DATA_HOME_PARTS), config_dir()])
+ 
+ 
+ def _is_data_home_secret(folded: str) -> bool:
+diff --git a/src/kiro_crew/agent_parts/kirocrew_launcher.py b/src/kiro_crew/agent_parts/kirocrew_launcher.py
+index 56204a995f62963c2d8fc017757e78cdb5dd4382..596021467107880cca25485d0bf5d42192c41b85 100644
+--- a/src/kiro_crew/agent_parts/kirocrew_launcher.py
++++ b/src/kiro_crew/agent_parts/kirocrew_launcher.py
+@@ -10,6 +10,7 @@ here; see :mod:`kiro_crew.agent_parts`.
+ 
+ from __future__ import annotations
+ 
++
+ import os
+ import shutil
+ import sys
+@@ -465,7 +466,9 @@ def ensure_kirocrew_on_path(
+         return None
+ 
+     # Already reachable on PATH as the same binary? Then there's nothing to do.
+-    existing = shutil.which("kirocrew")
++    from kiro_crew import _distribution  # noqa: PLC0415  composed onto kiro_crew.agent
++
++    existing = shutil.which(_distribution.CLI_NAME)
+     if existing and os.path.realpath(existing) == os.path.realpath(target):
+         return None
+ 
+@@ -489,7 +492,7 @@ def ensure_kirocrew_on_path(
+             return None
+ 
+     bin_dir = bin_dir or (Path.home() / ".local" / "bin")
+-    link = bin_dir / "kirocrew"
++    link = bin_dir / _distribution.CLI_NAME
+     try:
+         bin_dir.mkdir(parents=True, exist_ok=True)
+         if link.is_symlink() or link.exists():
+@@ -551,6 +554,7 @@ def refresh_own_kirocrew_link() -> str | None:
+     if platform_compat.IS_WINDOWS:
+         return None
+     from kiro_crew.config.paths import data_home  # noqa: PLC0415  import cycle
++    from kiro_crew import _distribution  # noqa: PLC0415  composed onto kiro_crew.agent
+     from kiro_crew.env_own_kirocrew import OWN_KIROCREW_DIR  # noqa: PLC0415  import cycle
+ 
+     target = _resolve_kirocrew_bin()
+@@ -565,12 +569,19 @@ def refresh_own_kirocrew_link() -> str | None:
+             return None
+         mkdirs_owner_only(directory)
+         link = directory / "kirocrew"
+-        if link.is_symlink() and os.readlink(link) == target:
++        # The distribution's own command name gets the same private link, so an
++        # agent told to run it reaches this install too.
++        names = dict.fromkeys(("kirocrew", _distribution.CLI_NAME))
++        if all(
++            (directory / name).is_symlink() and os.readlink(directory / name) == target
++            for name in names
++        ):
+             return None
+-        staged = directory / f".kirocrew.{os.getpid()}.tmp"
+-        staged.unlink(missing_ok=True)
+-        staged.symlink_to(target)
+-        os.replace(staged, link)
++        for name in names:
++            staged = directory / f".{name}.{os.getpid()}.tmp"
++            staged.unlink(missing_ok=True)
++            staged.symlink_to(target)
++            os.replace(staged, directory / name)
+     except OSError as exc:
+         logger.warning("Could not link this install's kirocrew into the crew home: %s", exc)
+         return None
+diff --git a/src/kiro_crew/agent_sdk/backends.py b/src/kiro_crew/agent_sdk/backends.py
+index bddaf0a0e50afebcee3fbf91f07c4e7599810cdb..ce2bc276ab926423483b0b56a472b8a175990cf7 100644
+--- a/src/kiro_crew/agent_sdk/backends.py
++++ b/src/kiro_crew/agent_sdk/backends.py
+@@ -310,6 +310,8 @@ seam). Both already existed; neither gained a member here.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import logging
+ import threading
+ from typing import FrozenSet, Set
+@@ -409,8 +411,9 @@ ACP_BACKEND_KIRO = ""
+ STORED_BACKEND_KIRO = "kiro"
+ 
+ # The harness an install runs when ``agent.acp_backend`` holds no choice (absent
+-# or ``""``) and KAS is selectable.
+-DEFAULT_ACP_BACKEND = ACP_BACKEND_KAS
++# or ``""``) and it is selectable. Upstream: KAS. A downstream distribution sets it
++# in ``_distribution``; an explicit stored choice is never affected.
++DEFAULT_ACP_BACKEND = _distribution.DEFAULT_ACP_BACKEND
+ 
+ # The harness an explicit Kiro CLI choice runs on once this host's kiro-cli is known
+ # to offer its v3 (KAS) engine. kiro-cli is retiring v2, and v3 reads none of what
+diff --git a/src/kiro_crew/apps/manager_builtins.py b/src/kiro_crew/apps/manager_builtins.py
+index a5979b2aa0b5551482480268f0b45da55b5684b2..89628fafe5eba6664d26b3458ef0f24d42e28d04 100644
+--- a/src/kiro_crew/apps/manager_builtins.py
++++ b/src/kiro_crew/apps/manager_builtins.py
+@@ -12,6 +12,8 @@ as ``kiro_crew.apps.manager.<name>``, and a patch there reaches this module too
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import ipaddress
+ import json
+ import logging
+@@ -421,7 +423,7 @@ def resolve_mcp_backend_url(mcp_servers: Any) -> str | None:
+     """
+     if not isinstance(mcp_servers, dict):
+         return None
+-    gateway_port = int(os.environ.get("KIROCREW_PORT", "5476"))
++    gateway_port = int(os.environ.get("KIROCREW_PORT", str(_distribution.DEFAULT_PORT)))
+     for server_cfg in mcp_servers.values():
+         if not isinstance(server_cfg, dict):
+             continue
+diff --git a/src/kiro_crew/beacon.py b/src/kiro_crew/beacon.py
+index 8c52df9f31358a8155498d4be95b635d60524263..95234af5a4a262a2b5c8211f34f1ccb90c1375c8 100644
+--- a/src/kiro_crew/beacon.py
++++ b/src/kiro_crew/beacon.py
+@@ -99,7 +99,7 @@ from typing import NamedTuple
+ 
+ from kiro_crew import platform_compat
+ from kiro_crew.atomic_write import atomic_write
+-from kiro_crew.config.paths import CONFIG_DIR_LEAF, KIRO_BASE_DIR_NAME, config_dir
++from kiro_crew.config.paths import DATA_HOME_PARTS, config_dir
+ from kiro_crew.platform.governance_profiles import (
+     GOVERNANCE_ERROR_REASON,
+     governance_permits,
+@@ -245,7 +245,7 @@ def is_default_home() -> bool:
+     if not raw:
+         return True
+     try:
+-        default = Path.home() / KIRO_BASE_DIR_NAME / CONFIG_DIR_LEAF
++        default = Path.home().joinpath(*DATA_HOME_PARTS)
+         return Path(raw).expanduser().resolve() == default.resolve()
+     except (OSError, RuntimeError):
+         # RuntimeError as well as OSError: Path.home() raises RuntimeError (not
+diff --git a/src/kiro_crew/cli.py b/src/kiro_crew/cli.py
+index d974b21fd0f41d7dfa4ecbdc9b259060c432150b..a6f007397a995f599621772ef95edea585992686 100644
+--- a/src/kiro_crew/cli.py
++++ b/src/kiro_crew/cli.py
+@@ -18,6 +18,8 @@ Commands:
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ # Ensure SSL certs are found before any library caches its SSL context.
+ # The ``kirocrew`` entry-point (console_scripts) bypasses ``__main__.py``,
+ # so we must run this here as well. The inherited llama.cpp path is removed
+@@ -377,7 +379,7 @@ def main() -> None:
+             sys.exit(1)
+ 
+     parser = argparse.ArgumentParser(
+-        prog="kirocrew",
++        prog=_distribution.CLI_NAME,
+         description="Kiro Crew — personal AI agent",
+         usage=cli_help.TOP_USAGE,
+         epilog=cli_help.render_epilog(),
+@@ -426,7 +428,7 @@ def main() -> None:
+         dest="command",
+         metavar="<command>",
+         help=argparse.SUPPRESS,
+-        prog="kirocrew",
++        prog=_distribution.CLI_NAME,
+     )
+ 
+     # Each command's arguments come from a registrar, called here in registration order: a
+diff --git a/src/kiro_crew/cli_desktop.py b/src/kiro_crew/cli_desktop.py
+index 57173b2f8267f69a0ccd2b2a7fcc09bd9ac6bae5..3b6ba6dae102248703025994d4e6ad71d7e7d2d5 100644
+--- a/src/kiro_crew/cli_desktop.py
++++ b/src/kiro_crew/cli_desktop.py
+@@ -16,6 +16,8 @@ Debug-only, and gated by the same ``KIROCREW_DEBUG`` check as ``kirocrew perf``.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import argparse
+ import json
+ import os
+@@ -46,7 +48,7 @@ PRODUCT_NAMES = ("KiroCrew", "KiroCrew Nightly")
+ # is <userData>/logs, and Electron derives userData from the package `name`, not the
+ # productName. Kept in sync with the `name` in website/electron/package.json and the
+ # nightly `-c.extraMetadata.name=` override in packaging/build-desktop.sh.
+-PACKAGE_NAMES = ("kirocrew-desktop", "kirocrew-desktop-nightly")
++PACKAGE_NAMES = _distribution.DESKTOP_PACKAGE_NAMES
+ 
+ SUPPORTED_VERSION = 1
+ 
+diff --git a/src/kiro_crew/cli_help.py b/src/kiro_crew/cli_help.py
+index 3970b015c5c68c3f5170dc14df9a12ee44a46c4a..90426efcf28981b89b907e56a66e590b1b452f05 100644
+--- a/src/kiro_crew/cli_help.py
++++ b/src/kiro_crew/cli_help.py
+@@ -17,12 +17,14 @@ listings.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import argparse
+ from typing import Any, Iterable, Iterator, Mapping
+ 
+ # The dashboard port a default install binds. Duplicated as a STRING for help
+ # text only; the runtime value is config/loader_credentials.py's ``_DEFAULT_PORT``.
+-_DEFAULT_PORT_TEXT = "5476"
++_DEFAULT_PORT_TEXT = str(_distribution.DEFAULT_PORT)
+ 
+ # Ordered sections -> ordered (command, one-line summary) pairs. Order here is
+ # display order; the first section is what a new user should read first.
+diff --git a/src/kiro_crew/cli_open.py b/src/kiro_crew/cli_open.py
+index f8e1b319553face0b1e034ac049e2d3fc85704f6..9a0823f283aed703b678d153e8cdeb33a5f5d384 100644
+--- a/src/kiro_crew/cli_open.py
++++ b/src/kiro_crew/cli_open.py
+@@ -17,6 +17,8 @@ registered the scheme. ``--print`` skips the OS step.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import os
+ import re
+ import sys
+@@ -24,7 +26,7 @@ from urllib.parse import quote
+ 
+ from kiro_crew.platform_compat_trust import open_with_default_app
+ 
+-SCHEME = "kirocrew"
++SCHEME = _distribution.URL_SCHEME
+ 
+ #: Mirrors ``SLOT_KEY_RE`` in website/electron/deep-link.js. Checked with
+ #: ``fullmatch``: under ``re.match`` a trailing ``$`` also matches before a final
+diff --git a/src/kiro_crew/config/loader_credentials.py b/src/kiro_crew/config/loader_credentials.py
+index 3d5adda9179682f2b0a87d47675b26f680d6edc5..02f1a7135035ff10bd642c2016010bf8c9f61fdc 100644
+--- a/src/kiro_crew/config/loader_credentials.py
++++ b/src/kiro_crew/config/loader_credentials.py
+@@ -5,6 +5,8 @@ An owner of the :mod:`kiro_crew.config.loader` facade; it never imports the faca
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import codecs as _codecs
+ import locale as _locale
+ import logging
+@@ -166,7 +168,7 @@ _warned_env_keys: set[str] = set()
+ _shadow_checked_env_keys: set[str] = set()
+ 
+ 
+-_DEFAULT_PORT = 5476
++_DEFAULT_PORT = _distribution.DEFAULT_PORT
+ 
+ # KIROCREW_PORT is validated at CLI entry (cli.py main()).
+ # By the time loader.py is imported the env var is a valid int or absent.
+diff --git a/src/kiro_crew/config/paths.py b/src/kiro_crew/config/paths.py
+index dd7158c16995989eb645cea50aeaaacb78ec6e95..30597ad1e7474bbf0ceb4b47e47fb19daf1f91ed 100644
+--- a/src/kiro_crew/config/paths.py
++++ b/src/kiro_crew/config/paths.py
+@@ -27,6 +27,8 @@ backward compatibility, so existing callers continue to work unchanged.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import errno
+ import logging
+ import os
+@@ -46,12 +48,14 @@ logger = logging.getLogger(__name__)
+ # (e.g. the security keystone) can match it uniformly.
+ KIRO_BASE_DIR_NAME = ".kiro"
+ CONFIG_DIR_LEAF = "crew"
+-CONFIG_DIR_NAME = f"{KIRO_BASE_DIR_NAME}/{CONFIG_DIR_LEAF}"  # ".kiro/crew"
++#: The default data home as path segments under ``~`` (``(".kiro", "crew")`` upstream).
++DATA_HOME_PARTS: tuple[str, ...] = tuple(_distribution.DATA_HOME_PARTS)
++CONFIG_DIR_NAME = "/".join(DATA_HOME_PARTS)  # ".kiro/crew" upstream
+ 
+ # The pre-move top-level home (``~/.kirocrew``). Retained as a constant (not an
+ # inline literal) so the security keystone, autonudge, seed and the other
+ # legacy-path consumers reference the same source of truth.
+-LEGACY_CONFIG_DIR_NAME = ".kirocrew"
++LEGACY_CONFIG_DIR_NAME = _distribution.LEGACY_HOME_NAME
+ 
+ # Recovery-pointer breadcrumb written at the TOP-LEVEL home (``~/.kirocrew.breadcrumb``),
+ # deliberately OUTSIDE ``~/.kiro/``. The data home now nests under kiro-cli's
+@@ -63,7 +67,7 @@ LEGACY_CONFIG_DIR_NAME = ".kirocrew"
+ # what was lost. It is NOT a backup — just a durable signpost. Only written on
+ # the default (non-override) path; a ``KIROCREW_HOME`` override is the user's own chosen
+ # location and carries no ``~/.kiro/`` wipe risk.
+-RECOVERY_BREADCRUMB_NAME = ".kirocrew.breadcrumb"
++RECOVERY_BREADCRUMB_NAME = _distribution.RECOVERY_BREADCRUMB_NAME
+ 
+ OUTBOX_DIR_NAME = "outbox"
+ 
+@@ -76,7 +80,7 @@ KEYLESS_WORK_DIR_NAME = "bg-runtime"
+ # Override: KIROCREW_WORKSPACE env var or <config_dir>/workspace_dir
+ # macOS: /Volumes/workplace/kirocrew-workspace (fallback ~/workplace)
+ # Linux: ~/workplace/kirocrew-workspace
+-_WORKSPACE_DIR_NAME = "kirocrew-workspace"
++_WORKSPACE_DIR_NAME = _distribution.WORKSPACE_DIR_NAME
+ 
+ # Once-per-process cache of the RESOLVED default data home so config_dir()
+ # resolves it once and every later call returns the same directory with no extra
+@@ -109,7 +113,7 @@ _HOME_CREATE_MODE = 0o777 if sys.platform == "win32" else 0o700
+ 
+ def _default_home() -> Path:
+     """Resolve the default (non-override) data root: ``~/.kiro/crew``."""
+-    return Path.home() / KIRO_BASE_DIR_NAME / CONFIG_DIR_LEAF
++    return Path.home().joinpath(*DATA_HOME_PARTS)
+ 
+ 
+ def _legacy_home() -> Path:
+diff --git a/src/kiro_crew/cron_script_context.py b/src/kiro_crew/cron_script_context.py
+index 318f568945258487040582702967a9afd3529e12..b01eae06255aa84c5f7bef759684501bbd7c24e1 100644
+--- a/src/kiro_crew/cron_script_context.py
++++ b/src/kiro_crew/cron_script_context.py
+@@ -11,6 +11,8 @@ reaches every name here, and a patch through it reaches this module too
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import json
+ import logging
+ import os
+@@ -92,7 +94,7 @@ class ScriptContext:
+     """
+ 
+     job: CronJob
+-    _port: int = 5476
++    _port: int = _distribution.DEFAULT_PORT
+     _secret: str = ""
+     _session_token: str = ""
+     _kept_servers: KeptMcpServers = field(init=False, repr=False, compare=False)
+@@ -104,7 +106,7 @@ class ScriptContext:
+         # fallback for a directly-constructed context and is 5476 on a --port auto
+         # gateway, which is a SIBLING rather than this instance.
+         self._port = int(
+-            os.environ.pop("_KIROCREW_DIAL_PORT", "") or os.environ.get("KIROCREW_PORT", "5476")
++            os.environ.pop("_KIROCREW_DIAL_PORT", "") or os.environ.get("KIROCREW_PORT", str(_distribution.DEFAULT_PORT))
+         )
+         # Secret injected via temp file (not inherited env) to prevent privilege escalation.
+         # Pop env var and unlink file immediately so fn(ctx) cannot access the secret directly.
+diff --git a/src/kiro_crew/dashboard/token_auth.py b/src/kiro_crew/dashboard/token_auth.py
+index ada74aa1ee13a5314404be6ec03223bc9c052767..47b43849e64b792f4cdda83686a4fd2757d91769 100644
+--- a/src/kiro_crew/dashboard/token_auth.py
++++ b/src/kiro_crew/dashboard/token_auth.py
+@@ -6,6 +6,8 @@ tracking, and aiohttp middleware for Slack-gated dashboard access.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import asyncio
+ import importlib as _importlib
+ import json
+@@ -135,7 +137,7 @@ def token_auth_middleware(
+     internal_paths: frozenset[str] = frozenset(),
+     mixed_internal_paths: frozenset[str] = frozenset(),
+     internal_secret: str = "",
+-    port: int = 5476,
++    port: int = _distribution.DEFAULT_PORT,
+     local_only: bool = True,
+     spa_shell_handler: Callable[..., Any] | None = None,
+     tailnet_trust: TailnetTrust | None = None,
+diff --git a/src/kiro_crew/dashboard/urls.py b/src/kiro_crew/dashboard/urls.py
+index 60046baa184b7fabcd9decf5e5f3e62f783beea8..a4a3cc6e7f80fa60d08395d26812dec241e71887 100644
+--- a/src/kiro_crew/dashboard/urls.py
++++ b/src/kiro_crew/dashboard/urls.py
+@@ -16,6 +16,8 @@ for two lines of URL parsing. Keep this module stdlib-only.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import ipaddress
+ import logging
+ import os
+@@ -27,7 +29,7 @@ from urllib.parse import parse_qs, quote, urlparse
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_DEFAULT_PORT = 5476
++_DEFAULT_PORT = _distribution.DEFAULT_PORT
+ 
+ _BIND_LOCAL = "127.0.0.1"
+ _BIND_ALL = "0.0.0.0"
+diff --git a/src/kiro_crew/irq.py b/src/kiro_crew/irq.py
+index 446c2aa266c1594547646b3e3b8a02b14845811e..9896ab3d8bf142995e1b82cfa37e06220d3aa8dc 100644
+--- a/src/kiro_crew/irq.py
++++ b/src/kiro_crew/irq.py
+@@ -58,6 +58,8 @@ it off for callers that would rather be woken early than woken once.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import hashlib
+ import json
+ import logging
+@@ -364,7 +366,7 @@ class Probe:
+ 
+ def _state_dir() -> Path:
+     home = os.environ.get("KIROCREW_HOME")
+-    base = Path(home) if home else Path.home() / ".kiro" / "crew"
++    base = Path(home) if home else Path.home().joinpath(*_distribution.DATA_HOME_PARTS)
+     return base / "watch"
+ 
+ 
+diff --git a/src/kiro_crew/learn.py b/src/kiro_crew/learn.py
+index 208ce75ea8b848bd3f5cb609e7ee58fb52e176d2..2d2288dfe77fe9990439e1ee688cf74a133aaa42 100644
+--- a/src/kiro_crew/learn.py
++++ b/src/kiro_crew/learn.py
+@@ -8,6 +8,8 @@ Storage: ``<config_dir>/lessons.jsonl`` (append-only JSONL).
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import json
+ import logging
+ import stat
+@@ -64,7 +66,7 @@ def lesson_contains_injection(rule: object, negative: object = None) -> bool:
+ # ``KIROCREW_HOME`` only insofar as this fallback is rarely reached — a NAMED
+ # memory store cannot land here (see ``_is_owned_store_root``), so the normal
+ # path resolves through ``config_dir()``, which does honor the override.
+-_DEFAULT_DIR = Path.home() / ".kiro" / "crew"
++_DEFAULT_DIR = Path.home().joinpath(*_distribution.DATA_HOME_PARTS)
+ 
+ 
+ def _is_owned_store_root(base_dir: Path) -> bool:
+diff --git a/src/kiro_crew/md_notebook_state.py b/src/kiro_crew/md_notebook_state.py
+index daf13ab0b0beadd16cde698564a2eed0fd66822f..cee8fc08d28ec990e6527bd1ec5fece051ee0f92 100644
+--- a/src/kiro_crew/md_notebook_state.py
++++ b/src/kiro_crew/md_notebook_state.py
+@@ -18,6 +18,8 @@ gateway's app spawner can both call it, and the Notes backend can read its names
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import contextlib
+ import logging
+ import os
+@@ -65,7 +67,7 @@ def _crew_home() -> Path:
+         return config_dir()
+     except Exception:
+         override = os.environ.get("KIROCREW_HOME")
+-        return Path(override) if override else Path.home() / ".kiro" / "crew"
++        return Path(override) if override else Path.home().joinpath(*_distribution.DATA_HOME_PARTS)
+ 
+ 
+ def default_state_dir() -> Path:
+diff --git a/src/kiro_crew/pod/config.py b/src/kiro_crew/pod/config.py
+index 4d09a6b1c80bcc799c8408e7bdca3cceaf7ef8bc..194ca83d30449639929955339cfbd82135880d48 100644
+--- a/src/kiro_crew/pod/config.py
++++ b/src/kiro_crew/pod/config.py
+@@ -8,6 +8,8 @@ collide with a developer's live pods.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import logging
+ import os
+ from dataclasses import dataclass
+@@ -23,7 +25,7 @@ _MAX_PORT = 65535
+ 
+ # The canonical live gateway port a pod must never bind. Overridable for hosts
+ # that run their live plane elsewhere.
+-DEFAULT_LIVE_PORT = 5476
++DEFAULT_LIVE_PORT = _distribution.DEFAULT_PORT
+ 
+ # Pod ports are derived as BASE + (cksum(name) % 199) + 1, i.e. BASE+1 .. BASE+199.
+ DEFAULT_BASE_PORT = 7810
+diff --git a/src/kiro_crew/security/vocabulary.py b/src/kiro_crew/security/vocabulary.py
+index 00ca65bdd13041e0be7d2870cc61068178723c9e..ca62ec7e5a17def5149055d08bb57194e23b7f96 100644
+--- a/src/kiro_crew/security/vocabulary.py
++++ b/src/kiro_crew/security/vocabulary.py
+@@ -20,13 +20,17 @@ form, records that distinction where the matching happens.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import re
+ 
+-_SELF_NAME_RE = re.compile(r"kiro[-.]?crew")
++_SELF_NAME_RE = re.compile(r"kiro[-.]?crew|" + re.escape(_distribution.CLI_NAME))
+ 
+ 
+-_SELF_PROGRAM_RE = re.compile(r"\Akiro[-.]?crew(?:\.(?:exe|cmd|bat|sh|py))?\Z")
+-_SELF_PROGRAM_SPELLINGS = ("kirocrew", "kiro-crew", "kiro.crew")
++_SELF_PROGRAM_RE = re.compile(
++    r"\A(?:kiro[-.]?crew|" + re.escape(_distribution.CLI_NAME) + r")(?:\.(?:exe|cmd|bat|sh|py))?\Z"
++)
++_SELF_PROGRAM_SPELLINGS = tuple(dict.fromkeys(("kirocrew", "kiro-crew", "kiro.crew", _distribution.CLI_NAME)))
+ # The kill programs that select their target BY NAME.  Bare ``kill`` takes PIDs
+ # and is handled separately (it can only reach the product through a command
+ # substitution that resolves the name), and both verbs are matched on TOKENS via
+diff --git a/src/kiro_crew/service/common.py b/src/kiro_crew/service/common.py
+index e5813f605af4352ea57fc7cde235067a33a2c71e..8df63164eb3a8f52e067112de88f05a53ab8f3f6 100644
+--- a/src/kiro_crew/service/common.py
++++ b/src/kiro_crew/service/common.py
+@@ -2,6 +2,8 @@
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import enum
+ import os
+ import shlex
+@@ -14,8 +16,8 @@ from pathlib import Path, PurePosixPath
+ from kiro_crew.config import loader
+ from kiro_crew.config.paths import CONFIG_DIR_NAME
+ 
+-SERVICE_NAME = "kirocrew"  # systemd unit name (without .service)
+-LAUNCHD_LABEL = "dev.kirocrew.gateway"  # launchd Label
++SERVICE_NAME = _distribution.SERVICE_NAME  # systemd unit name (without .service)
++LAUNCHD_LABEL = _distribution.LAUNCHD_LABEL  # launchd Label
+ 
+ 
+ # The NAME of the environment variable kiro-cli reads its model credential
+diff --git a/src/kiro_crew/session_storage_parts/store_inventory.py b/src/kiro_crew/session_storage_parts/store_inventory.py
+index 4a6b70416494fa7ba631830ec66757473866a486..975d71f2fb25b8fd5b4faee5328137919ce5ed52 100644
+--- a/src/kiro_crew/session_storage_parts/store_inventory.py
++++ b/src/kiro_crew/session_storage_parts/store_inventory.py
+@@ -28,7 +28,7 @@ from pathlib import Path
+ from kiro_crew import hooks, platform_compat
+ from kiro_crew.chat_attachments import ATTACHMENTS_DIR_SUFFIX, attachments_dir
+ from kiro_crew.config.paths import (
+-    CONFIG_DIR_LEAF,
++    DATA_HOME_PARTS,
+     KIRO_BASE_DIR_NAME,
+     data_home,
+     kiro_home,
+@@ -1042,7 +1042,7 @@ def reclaim_block_reason(*, cached: bool = False) -> str:
+     # BOTH of these are defaults, not isolation: an install that has not yet
+     # migrated legitimately reports the legacy home, and treating that as an
+     # isolated instance would refuse every pre-migration install.
+-    defaults = {home / KIRO_BASE_DIR_NAME / CONFIG_DIR_LEAF, _norm(legacy_home())}
++    defaults = {home.joinpath(*DATA_HOME_PARTS), _norm(legacy_home())}
+     data = _norm(data_home())
+     if data in defaults:
+         # The mirror of the isolated-instance case, and just as destructive: a pod
+diff --git a/src/kiro_crew/snapshot.py b/src/kiro_crew/snapshot.py
+index 523daa49e766663d069eacb08019381f0b0822cd..0e3b3b7f534e869aec8391d8fe797a1788f3681a 100644
+--- a/src/kiro_crew/snapshot.py
++++ b/src/kiro_crew/snapshot.py
+@@ -24,6 +24,8 @@ imports it, and a patch of it belongs on that owner.
+ 
+ from __future__ import annotations
+ 
++from kiro_crew import _distribution  # downstream-regenerated identity values
++
+ import argparse
+ import importlib
+ import json
+@@ -221,7 +223,7 @@ from kiro_crew.staging import staging_dir
+ try:
+     from kiro_crew.config.loader import DASHBOARD_PORT as _DASHBOARD_PORT
+ except Exception:  # pragma: no cover - optional during early/standalone import
+-    _DASHBOARD_PORT = int(os.environ.get("KIROCREW_PORT", 5476))
++    _DASHBOARD_PORT = int(os.environ.get("KIROCREW_PORT", _distribution.DEFAULT_PORT))
+ 
+ 
+ def _redactor() -> Any:
+@@ -251,7 +253,7 @@ def _default_snapshot_dir() -> str:
+ 
+         return str(config_dir() / "snapshots")
+     except Exception:
+-        return str(Path.home() / ".kiro" / "crew" / "snapshots")
++        return str(Path.home().joinpath(*_distribution.DATA_HOME_PARTS, "snapshots"))
+ 
+ 
+ def _audit(event_type: str, resources: str) -> None:
+diff --git a/test/test_cli_open.py b/test/test_cli_open.py
+index 561a35481b8f2e2f0b04db20fcfcc9b9000f23bb..cee6ab847d995dd4c5e895d06aca980e0328fd33 100644
+--- a/test/test_cli_open.py
++++ b/test/test_cli_open.py
+@@ -151,5 +151,8 @@ class TestGrammarAgreesWithTheElectronResolver:
+         assert cli_open._SLOT_KEY_RE.pattern == _js_regex("SLOT_KEY_RE")
+ 
+     def test_scheme_is_identical(self):
++        # Both sides read the scheme from their distribution module.
+         source = _DEEP_LINK_JS.read_text(encoding="utf-8")
+-        assert f'const SCHEME = "{cli_open.SCHEME}";' in source
++        assert "const SCHEME = DISTRIBUTION.URL_SCHEME;" in source
++        dist = (_DEEP_LINK_JS.parent / "distribution.js").read_text(encoding="utf-8")
++        assert f'URL_SCHEME: "{cli_open.SCHEME}",' in dist
+diff --git a/test/test_config_paths.py b/test/test_config_paths.py
+index 94aeb0be1b76cad4a374cfbe2f6c36062b5e839a..825e8fd14344222929a2bf22ae82e97f552783eb 100644
+--- a/test/test_config_paths.py
++++ b/test/test_config_paths.py
+@@ -713,7 +713,7 @@ class TestLeafPurity:
+             "leaked = sorted(\n"
+             "    m for m in sys.modules\n"
+             "    if m.startswith('kiro_crew')\n"
+-            "    and m not in {'kiro_crew', 'kiro_crew.config', 'kiro_crew.config.paths'}\n"
++            "    and m not in {'kiro_crew', 'kiro_crew._distribution', 'kiro_crew.config', 'kiro_crew.config.paths'}\n"
+             ")\n"
+             "print(','.join(leaked))\n"
+         )
+diff --git a/website/electron/deep-link.js b/website/electron/deep-link.js
+index e3797997dd8fa3504607ca3a745dfe979dd45a1a..57727aaa083dff23d1adbe177fcdc66837cb9adf 100644
+--- a/website/electron/deep-link.js
++++ b/website/electron/deep-link.js
+@@ -18,10 +18,11 @@
+ // Electron-free on purpose (like display-media.js and external-scheme.js) so
+ // the parsing and the allowlist are unit-tested without a live app;
+ // deep-link-handler.js and main.js own the Electron wiring and the window raise.
++const DISTRIBUTION = require("./distribution");
+ "use strict";
+ 
+ /** The scheme this app registers. Also the value in package.json `build.protocols`. */
+-const SCHEME = "kirocrew";
++const SCHEME = DISTRIBUTION.URL_SCHEME;
+ 
+ /**
+  * Pick the kirocrew:// URL out of a process argv, if one is there.
+diff --git a/website/electron/distribution.js b/website/electron/distribution.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..80e68c39a90f34d33c38682456d88873b172590a
+--- /dev/null
++++ b/website/electron/distribution.js
+@@ -0,0 +1,11 @@
++"use strict";
++// Distribution identity for the Electron shell. Mirrors
++// src/kiro_crew/_distribution.py; a downstream distribution regenerates both at
++// build time (DevTeam: scripts/distribution.py from devteam.conf).
++module.exports = Object.freeze({
++  PRODUCT_NAME: "Kiro Crew",
++  CLI_NAME: "kirocrew",
++  DATA_HOME_PARTS: Object.freeze([".kiro", "crew"]),
++  DEFAULT_PORT: 5476,
++  URL_SCHEME: "kirocrew",
++});
+diff --git a/website/electron/home-dir.js b/website/electron/home-dir.js
+index c544e0335fcf47f372a9374ad04e565f640a9503..76421a46aed353495b46156aefef0efe52adc651 100644
+--- a/website/electron/home-dir.js
++++ b/website/electron/home-dir.js
+@@ -19,9 +19,10 @@
+ 
+ const nodeOs = require("os");
+ const nodePath = require("path");
++const DISTRIBUTION = require("./distribution");
+ 
+ function canonicalHome(os = nodeOs, path = nodePath) {
+-  return path.join(os.homedir(), ".kiro", "crew");
++  return path.join(os.homedir(), ...DISTRIBUTION.DATA_HOME_PARTS);
+ }
+ 
+ /**
+diff --git a/website/electron/host-config.js b/website/electron/host-config.js
+index 863678cf0cb20a3af68dd9f6a6db00827fb32224..0b2b54653298d7d06427138eed868eb5c13467b6 100644
+--- a/website/electron/host-config.js
++++ b/website/electron/host-config.js
+@@ -2,6 +2,7 @@
+ // Split out from main.js so the migration and config logic can be unit-tested
+ // without spinning up Electron.
+ 
++const DISTRIBUTION = require("./distribution");
+ const { DEFAULT_REMOTE_BIN } = require("./remote-token");
+ const { defaultedPort, portIsSchemeDefault } = require("./gateway-auth-hint");
+ 
+@@ -167,7 +168,7 @@ function setRemoteHostConfig(
+ }
+ 
+ /** Port a launch falls back to when no stored record names a better one. */
+-const DEFAULT_PORT = 5476;
++const DEFAULT_PORT = DISTRIBUTION.DEFAULT_PORT;
+ 
+ /** How far above `DEFAULT_PORT` to look for a port no configured crew claims. */
+ const FALLBACK_SCAN_PORTS = 64;
+diff --git a/website/electron/package.json b/website/electron/package.json
+index 24f14243604396f2293353defa8a07f8420f2fe0..b4b427d25bf99a83c50105e9343558b59aa8b2e4 100644
+--- a/website/electron/package.json
++++ b/website/electron/package.json
+@@ -147,6 +147,7 @@
+     },
+     "files": [
+       "main.js",
++      "distribution.js",
+       "gateway-supervisor.js",
+       "shell-bundle-watch.js",
+       "runtime/gateway/launch-preflight.js",
+diff --git a/website/electron/window-lifecycle.js b/website/electron/window-lifecycle.js
+index a9c41cfa9a62d789a1ebe7976371799a4707c82a..acca8085fa25e1cc93645d1b219998b8cdd6306d 100644
+--- a/website/electron/window-lifecycle.js
++++ b/website/electron/window-lifecycle.js
+@@ -1,4 +1,5 @@
+ "use strict";
++const DISTRIBUTION = require("./distribution");
+ 
+ const fs = require("fs");
+ const path = require("path");
+@@ -467,10 +468,10 @@ function createWindowLifecycle(options) {
+       // Windows omits the default local port; secondary/remote windows retain a
+       // suffix so they remain distinguishable in the taskbar.
+       let suffix = customName || remoteName || "";
+-      if (!suffix && windowPort && String(windowPort) !== "5476") {
++      if (!suffix && windowPort && String(windowPort) !== String(DISTRIBUTION.DEFAULT_PORT)) {
+         suffix = `[:${windowPort}]`;
+       }
+-      win.setTitle(suffix ? `Kiro Crew ${suffix}` : "Kiro Crew");
++      win.setTitle(suffix ? `${DISTRIBUTION.PRODUCT_NAME} ${suffix}` : DISTRIBUTION.PRODUCT_NAME);
+     }
+ 
+     win._mcSetCustomName = (name) => {
+diff --git a/website/src/api/acpBackend.ts b/website/src/api/acpBackend.ts
+index 3795625ca9519c1a0990dda32842ece7b9d691e9..fa4be2e1e4d6cabb669f196be6bc127cfd1ff65a 100644
+--- a/website/src/api/acpBackend.ts
++++ b/website/src/api/acpBackend.ts
+@@ -1,6 +1,7 @@
+ import { i18nT } from '../i18n/t'
+ import { ApiError } from './apiError'
+ import type { AcpBackendProbe } from './client/config'
++import { DISTRIBUTION } from '../distribution'
+ 
+ /**
+  * Which agent harness the gateway runs, read off `agent.acp_backend` in the
+@@ -26,8 +27,9 @@ export const ACP_BACKEND_KAS = 'kas'
+ /** kiro-cli and its KAS relay: the harnesses backed by the Kiro service. */
+ export const KIRO_HARNESS_BACKENDS: readonly string[] = [ACP_BACKEND_KIRO, ACP_BACKEND_KAS]
+ 
+-/** The harness an install runs when it holds no choice (absent or `''`). */
+-export const DEFAULT_ACP_BACKEND = ACP_BACKEND_KAS
++/** The harness an install runs when it holds no choice (absent or `''`).
++ *  Upstream: KAS; a downstream distribution sets it in `distribution.ts`. */
++export const DEFAULT_ACP_BACKEND: string = DISTRIBUTION.defaultAcpBackend
+ 
+ /** The slice of the config body this check reads. */
+ export interface AcpBackendConfig {
+diff --git a/website/src/distribution.ts b/website/src/distribution.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3c78fac547928c7aa715bcd513439be089e5f7e4
+--- /dev/null
++++ b/website/src/distribution.ts
+@@ -0,0 +1,12 @@
++/**
++ * Distribution identity for the dashboard. Mirrors `src/kiro_crew/_distribution.py`;
++ * a downstream distribution regenerates both at build time (DevTeam:
++ * `scripts/distribution.py` from `devteam.conf`).
++ */
++export const DISTRIBUTION = {
++  productName: 'Kiro Crew',
++  cliName: 'kirocrew',
++  defaultPort: 5476,
++  /** Config-vocabulary id of the default harness ('kas', 'kiro', 'claude', ...). */
++  defaultAcpBackend: 'kas',
++} as const
+diff --git a/website/src/i18n/index.ts b/website/src/i18n/index.ts
+index 8a9352da389d548a9d148fbb3d0e986de0500f07..77111ef79ece0b81e4acf1ded344e37b25517725 100644
+--- a/website/src/i18n/index.ts
++++ b/website/src/i18n/index.ts
+@@ -34,6 +34,7 @@ import { initReactI18next } from 'react-i18next'
+ import { EN_TRANSLATION, mergeCatalogs } from './enCatalog'
+ import { DEFAULT_LANGUAGE, SUPPORTED_CODES } from './languages'
+ import { readStoredLanguage, resolveLanguage } from './detect'
++import { DISTRIBUTION } from '../distribution'
+ 
+ /** The one namespace every catalog uses — keys carry their own domain prefix. */
+ const NAMESPACE = 'translation'
+@@ -171,7 +172,7 @@ export function ensureCatalog(lng: string): Promise<boolean> {
+  * byte-identical to the Python-side `app.json` prose (the manifest-sync gate),
+  * so they keep the literal.
+  */
+-const DEFAULT_PRODUCT_NAME = 'Kiro Crew'
++const DEFAULT_PRODUCT_NAME: string = DISTRIBUTION.productName
+ let productName = DEFAULT_PRODUCT_NAME
+ 
+ /**
