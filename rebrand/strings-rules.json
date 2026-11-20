@@ -3,7 +3,7 @@
   "links": [
     {
       "find": "github\\.com/kirodotdev/KiroCrew/discussions/?",
-      "replace": "{REPO_HP}/issues"
+      "replace": "{REPO_HP}/discussions"
     },
     {
       "find": "(github\\.com/kirodotdev/KiroCrew/issues/new)\\?template=[\\w.-]+&",
@@ -35,7 +35,7 @@
     },
     {
       "find": "https://kiro\\.dev/discord/?",
-      "replace": "https://{REPO_HP}/issues"
+      "replace": "https://{REPO_HP}/discussions"
     }
   ],
   "product": [

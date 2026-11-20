@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 20 Nov 2026 02:36:38 +0300
+Subject: [PATCH] test(i18n): read the product name from the distribution
+ module
+
+productName.test.ts pinned the stock name and glossary.test.ts the
+exact count of dropped do-not-translate terms, so both failed on any
+downstream build that rewrites its catalogs. The default product name
+now comes from DISTRIBUTION, the documented exception keys may name
+either Kiro Crew or the distribution, and the exact-count ratchet runs
+only on the stock build (its upper bound still applies everywhere).
+
+diff --git a/website/src/i18n/glossary.test.ts b/website/src/i18n/glossary.test.ts
+index e480584429ac5431a566403c2ce8f4f187588a5b..6617f4c8629753480a9463ddcfe1c6105582c67f 100644
+--- a/website/src/i18n/glossary.test.ts
++++ b/website/src/i18n/glossary.test.ts
+@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest'
+ import { CATALOGS as RUNTIME_CATALOGS } from './catalogs'
+ import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './languages'
+ import glossary from './glossary.json'
++import { DISTRIBUTION } from '../distribution'
+ 
+ // 1 genuine drop remains (zh-CN onboarding).
+ const DNT_BASELINE = 1
+@@ -109,7 +110,9 @@ describe('glossary', () => {
+     ).toBeLessThanOrEqual(DNT_BASELINE)
+   })
+ 
+-  it('ratchet: report exact DNT count for tightening', () => {
++  // The exact count is upstream's tightening nudge; a downstream build rewrites
++  // product names in its catalogs, so only the upper bound above applies there.
++  it.skipIf(DISTRIBUTION.productName !== 'Kiro Crew')('ratchet: report exact DNT count for tightening', () => {
+     expect(
+       DROPPED.length,
+       `only ${DROPPED.length} now — lower DNT_BASELINE to ${DROPPED.length}`,
+diff --git a/website/src/i18n/productName.test.ts b/website/src/i18n/productName.test.ts
+index 676d0141e3452134d2de2ee539152e07055bee9c..c19076ce9952e6d4e461ed7f90af6daf96e18922 100644
+--- a/website/src/i18n/productName.test.ts
++++ b/website/src/i18n/productName.test.ts
+@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest'
+ 
+ import { CATALOGS } from './catalogs'
+ import { initI18n, i18next, setProductName } from './all'
++import { DISTRIBUTION } from '../distribution'
+ 
+ // No-op — the vitest setup file already initialized i18n. Explicit so this
+ // file also works standalone, and so the late-override test below is
+@@ -35,12 +36,12 @@ i18next.addResource('en', 'translation', 'test.updating_product', 'Updating {{pr
+ describe('productName interpolation variable', () => {
+   it('defaults to the stock product name', () => {
+     expect(i18next.options.interpolation?.defaultVariables).toMatchObject({
+-      productName: 'Kiro Crew',
++      productName: DISTRIBUTION.productName,
+     })
+   })
+ 
+   it('renders a placeholder-bearing value identically to the old literal', () => {
+-    expect(i18next.t('test.updating_product')).toBe('Updating Kiro Crew…')
++    expect(i18next.t('test.updating_product')).toBe(`Updating ${DISTRIBUTION.productName}…`)
+   })
+ 
+   it('lets a call-time variable win over the default', () => {
+@@ -111,7 +112,12 @@ describe('productName interpolation variable', () => {
+       for (const k of EXCEPTIONS) {
+         const v = flat[k]
+         if (v === undefined) continue
+-        expect(v, `${lang}:${k} must keep the literal product name`).toMatch(/Kiro[ -]?Crew/) // brand-ok
++        // A downstream distribution may name itself here instead (it sends this data
++        // to its own endpoints), but never through the placeholder.
++        expect(
++          /Kiro[ -]?Crew/.test(v) || v.includes(DISTRIBUTION.productName), // brand-ok
++          `${lang}:${k} must keep a literal product name`,
++        ).toBe(true)
+         expect(v, `${lang}:${k} must not interpolate the product name`).not.toContain('{{productName}}')
+       }
+     }

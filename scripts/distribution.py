@@ -49,6 +49,10 @@ agent = conf("DEFAULT_AGENT")
 scheme = conf("URL_SCHEME")
 service = conf("SERVICE_NAME")
 desktop_pkg = conf("DESKTOP_PACKAGE_NAME")
+env_prefix = conf("ENV_PREFIX")
+telemetry = conf("TELEMETRY_ENDPOINT").rstrip("/")
+feedback = conf("FEEDBACK_ENDPOINT").rstrip("/")
+community = os.environ.get("COMMUNITY_URL", "").strip()
 
 if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", cli):
     fail(f"CLI_NAME {cli!r}: use lowercase letters, digits and '-'")
@@ -68,6 +72,14 @@ for name, value in (("SERVICE_NAME", service), ("DESKTOP_PACKAGE_NAME", desktop_
     if not re.fullmatch(r"[a-z][a-z0-9-]*", value):
         fail(f"{name} {value!r}: use lowercase letters, digits and '-'")
 
+if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,30}", env_prefix) or env_prefix == "KIROCREW":
+    fail(f"ENV_PREFIX {env_prefix!r}: uppercase letters, digits and '_', not KIROCREW")
+for name, value in (("TELEMETRY_ENDPOINT", telemetry), ("FEEDBACK_ENDPOINT", feedback)):
+    if not value.startswith("https://"):
+        fail(f"{name} {value!r} must be an https:// URL")
+if community and not community.startswith("https://"):
+    fail(f"COMMUNITY_URL {community!r} must be an https:// URL or empty")
+
 leaf = parts[-1].lstrip(".") or cli
 py_values = {
     "PRODUCT_NAME": product,
@@ -77,11 +89,15 @@ py_values = {
     "LEGACY_HOME_NAME": f".{leaf}-no-legacy-home",
     "RECOVERY_BREADCRUMB_NAME": f".{leaf}.breadcrumb",
     "WORKSPACE_DIR_NAME": f"{cli}-workspace",
+    "ENV_PREFIX": env_prefix,
     "DEFAULT_PORT": port,
     "DEFAULT_ACP_BACKEND": BACKENDS[agent],
     "URL_SCHEME": scheme,
     "SERVICE_NAME": service,
     "LAUNCHD_LABEL": f"dev.{service}.gateway",
+    "BEACON_ENDPOINT": telemetry,
+    "FEEDBACK_INGESTION_URL": f"{feedback}/form",
+    "FEEDBACK_PROMPT_URL": f"{feedback}/form/prompt",
     "DESKTOP_PACKAGE_NAMES": (desktop_pkg, f"{desktop_pkg}-nightly"),
 }
 
@@ -111,6 +127,7 @@ def write_electron(path: Path) -> None:
         f"  PRODUCT_NAME: {js(product)},\n"
         f"  CLI_NAME: {js(cli)},\n"
         f"  DATA_HOME_PARTS: Object.freeze({js(list(parts))}),\n"
+        f"  ENV_PREFIX: {js(env_prefix)},\n"
         f"  DEFAULT_PORT: {port},\n"
         f"  URL_SCHEME: {js(scheme)},\n"
         "});\n",
@@ -133,6 +150,8 @@ def write_ts(path: Path) -> None:
         f"  defaultPort: {port},\n"
         "  /** Config-vocabulary id of the default harness ('kas', 'kiro', 'claude', ...). */\n"
         f"  defaultAcpBackend: {js(agent)},\n"
+        "  /** Community chat linked from the nav rail; '' hides the button. */\n"
+        f"  communityUrl: {js(community)},\n"
         "} as const\n",
         encoding="utf-8",
         newline="",
@@ -213,6 +232,10 @@ if cli != "kirocrew":
 edit_electron_package(ROOT / "website/electron/package.json")
 edit_lockfile(ROOT / "website/electron/package-lock.json")
 edit_text(ROOT / "packaging/build-desktop.sh", "kirocrew-desktop-nightly", f"{desktop_pkg}-nightly")
+# The config baseline pins the beacon endpoint's default.
+edit_text(ROOT / "config-baseline.json", "https://d175o3ylxqum0e.cloudfront.net", telemetry)
 
 print(f"  identity: {product} | cli {cli} | home ~/{'/'.join(parts)} | port {port} | "
-      f"agent {agent} | scheme {scheme}:// | service {service} | desktop {desktop_pkg}")
+      f"agent {agent} | scheme {scheme}:// | service {service} | desktop {desktop_pkg} | "
+      f"env {env_prefix}_HOME/_PORT | telemetry {telemetry} | feedback {feedback} | "
+      f"community {community or '(hidden)'}")

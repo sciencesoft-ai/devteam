@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 20 Nov 2026 02:04:33 +0300
+Subject: [PATCH] distribution: read telemetry, feedback and community URLs
+ from it
+
+The usage beacon (and the App install receipts that reuse it), the
+session-pulse survey's ingestion and prompt endpoints and the nav
+rail's community link now come from the distribution modules, so a
+downstream build can point its telemetry at its own collector and
+hide a community it does not run (communityUrl '' hides the button).
+Upstream values are unchanged.
+
+diff --git a/src/kiro_crew/_distribution.py b/src/kiro_crew/_distribution.py
+index ee1faad4057da4a0238fee1ded360cbd9fecda12..26ef9a3abb89da14bc8d773db22ba4f389337a5a 100644
+--- a/src/kiro_crew/_distribution.py
++++ b/src/kiro_crew/_distribution.py
+@@ -50,5 +50,14 @@ URL_SCHEME = "kirocrew"
+ SERVICE_NAME = "kirocrew"
+ LAUNCHD_LABEL = "dev.kirocrew.gateway"
+ 
++#: Default endpoint of the anonymous usage beacon, which App install receipts reuse
++#: (``telemetry.beacon_endpoint`` overrides it; "" turns both off).
++BEACON_ENDPOINT = "https://d175o3ylxqum0e.cloudfront.net"
++
++#: Where the in-app session-pulse survey posts answers, and where it asks whether to
++#: show itself (``dashboard/handlers/feedback.py``).
++FEEDBACK_INGESTION_URL = "https://ingestion.aperture-public-api.feedback.console.aws.dev/form"
++FEEDBACK_PROMPT_URL = "https://prompt.aperture-public-api.feedback.console.aws.dev/form/prompt"
++
+ #: npm package names of the desktop app (stable, nightly).
+ DESKTOP_PACKAGE_NAMES = ("kirocrew-desktop", "kirocrew-desktop-nightly")
+diff --git a/src/kiro_crew/config/sections_telemetry.py b/src/kiro_crew/config/sections_telemetry.py
+index 970862379d64021f881172266de6e4066796f62d..5e7cce15a2e98fc361335f6ccdcf7ef869352b5c 100644
+--- a/src/kiro_crew/config/sections_telemetry.py
++++ b/src/kiro_crew/config/sections_telemetry.py
+@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
+ from typing import Any
+ from urllib.parse import urlsplit as _urlsplit
+ 
++from kiro_crew import _distribution
+ from kiro_crew.config.fields import _meta
+ 
+ logger = logging.getLogger("kiro_crew.config.loader")
+@@ -18,7 +19,7 @@ logger = logging.getLogger("kiro_crew.config.loader")
+ # Default endpoint for the anonymous usage beacon (see kiro_crew/beacon.py).
+ # Lives here with the other config defaults so beacon.py adds no import edge
+ # into the config package. Setting the field to "" disables the beacon outright.
+-_DEFAULT_BEACON_ENDPOINT = "https://d175o3ylxqum0e.cloudfront.net"
++_DEFAULT_BEACON_ENDPOINT = _distribution.BEACON_ENDPOINT
+ 
+ 
+ @dataclass
+diff --git a/src/kiro_crew/dashboard/handlers/feedback.py b/src/kiro_crew/dashboard/handlers/feedback.py
+index 6f5488da09219f476568514b398ca2899090c199..680b4182f45a42fa38a7a34919f371cbf9f80f42 100644
+--- a/src/kiro_crew/dashboard/handlers/feedback.py
++++ b/src/kiro_crew/dashboard/handlers/feedback.py
+@@ -50,7 +50,7 @@ from typing import Any
+ import aiohttp
+ from aiohttp import web
+ 
+-from kiro_crew import beacon
++from kiro_crew import _distribution, beacon
+ from kiro_crew import sel as _sel_mod
+ from kiro_crew.config.loader import KiroCrewConfig
+ from kiro_crew.dashboard.handlers._shared import read_bounded_json, read_capped_response
+@@ -62,8 +62,8 @@ from kiro_crew.security import redact_credentials, redact_exfiltration_urls
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_INGESTION_URL = "https://ingestion.aperture-public-api.feedback.console.aws.dev/form"
+-_PROMPT_URL = "https://prompt.aperture-public-api.feedback.console.aws.dev/form/prompt"
++_INGESTION_URL = _distribution.FEEDBACK_INGESTION_URL
++_PROMPT_URL = _distribution.FEEDBACK_PROMPT_URL
+ 
+ _FORM_CATEGORY = "KiroCrew"  # brand-ok: literal Aperture portal identifier
+ _FORM_NAME = "SessionFeedback"
+diff --git a/website/src/distribution.ts b/website/src/distribution.ts
+index 3c78fac547928c7aa715bcd513439be089e5f7e4..861def80d0522014eb1e0e1ed474d640edd077a3 100644
+--- a/website/src/distribution.ts
++++ b/website/src/distribution.ts
+@@ -9,4 +9,6 @@ export const DISTRIBUTION = {
+   defaultPort: 5476,
+   /** Config-vocabulary id of the default harness ('kas', 'kiro', 'claude', ...). */
+   defaultAcpBackend: 'kas',
++  /** Community chat linked from the nav rail; '' hides the button. */
++  communityUrl: 'https://kiro.dev/discord/',
+ } as const
+diff --git a/website/src/shell/nav/railChrome.tsx b/website/src/shell/nav/railChrome.tsx
+index 1dc5c8e6f58ed203990d8f100c2835a9ffa1847b..26860d6199133db8a4acfeccb416c28179aba6c1 100644
+--- a/website/src/shell/nav/railChrome.tsx
++++ b/website/src/shell/nav/railChrome.tsx
+@@ -4,6 +4,7 @@ import { ArrowLeftToLine, PanelLeft } from 'lucide-react'
+ import { GithubIcon, DiscordIcon } from '../../components/BrandIcon'
+ import type { getThemeBranding } from '../../themeBranding'
+ import { i18nT } from '../../i18n/t'
++import { DISTRIBUTION } from '../../distribution'
+ import { uiLocation } from '../../uiLocations/uiLocation'
+ import { useGuideRevealScope } from '../../guide/GuideRevealScope'
+ import { OverlayPortal } from '../../components/overlayRoot'
+@@ -250,7 +251,9 @@ export function RailCommunityLinks({ effectiveCollapsed, setReportProblemOpen }:
+               its sibling link so the row's width budget above is unchanged. */}
+           <button type="button" onClick={() => setReportProblemOpen(true)} title={i18nT('app.report_a_problem_with_diagnostics')} aria-label={i18nT('app.report_a_problem_with_diagnostics')} {...uiLocation('shell.report-problem')} className="min-w-0 overflow-hidden text-ellipsis rounded text-muted hover:text-text transition-colors cursor-pointer bg-transparent border-0 p-0 text-[12px]">{i18nT('app.report_issue')}</button>
+         </div>
+-        <a href="https://kiro.dev/discord/" target="_blank" rel="noopener noreferrer" title={i18nT('app.discord_community')} aria-label={i18nT('app.kiro_discord_community')} className="flex items-center justify-center ml-1 w-6 h-6 rounded-md text-muted hover:text-text hover:bg-bg-hover transition-colors shrink-0"><DiscordIcon size={15} /></a>
++        {DISTRIBUTION.communityUrl && (
++          <a href={DISTRIBUTION.communityUrl} target="_blank" rel="noopener noreferrer" title={i18nT('app.discord_community')} aria-label={i18nT('app.kiro_discord_community')} className="flex items-center justify-center ml-1 w-6 h-6 rounded-md text-muted hover:text-text hover:bg-bg-hover transition-colors shrink-0"><DiscordIcon size={15} /></a>
++        )}
+       </div>
+     </div>
+   )

@@ -1,8 +1,9 @@
 {
-  "_doc": "Catalog keys whose 'Kiro Crew' names the UPSTREAM project as a data recipient (feedback survey -> AWS-hosted Kiro Crew feedback endpoint; install receipts -> Kiro Crew's app catalog). Kept verbatim in every language so the disclosure stays true.",
+  "_doc": "keys: catalog keys kept verbatim in every language because their 'Kiro Crew' names the UPSTREAM project and is still accurate (install receipts are triggered by installs from Kiro Crew's official App catalog, which DevTeam still uses). recipient_keys: disclosures that name who RECEIVES the data; patch 0030 sends it to DevTeam's own endpoint, so every 'Kiro Crew' in them becomes PRODUCT_NAME, including the 'Kiro Crew team' form the general rule leaves alone.",
   "keys": [
-    "components.sessionPulseSurveyCard.email_disclosure",
-    "privacyDisclosure.installReceiptBody",
-    "privacyDisclosure.installReceiptFields"
+    "privacyDisclosure.installReceiptBody"
+  ],
+  "recipient_keys": [
+    "components.sessionPulseSurveyCard.email_disclosure"
   ]
 }
