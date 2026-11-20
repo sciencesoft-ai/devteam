@@ -345,8 +345,17 @@ def rewrite_agent_prerequisite():
                 "  !insertmacro MUI_PAGE_FINISH\n")
     if text.count(old_show) != 1:
         sys.exit("rewrite_strings: installer.nsh finish page changed upstream; update rewrite_agent_prerequisite()")
+    # The function is defined AFTER MUI_PAGE_FINISH: that macro declares the
+    # mui.FinishPage.* variables, and makensis treats an undeclared variable
+    # as an error. A page callback may name a function defined later. The
+    # check sits under the same guard as MUI_FINISHPAGE_LINK, because
+    # mui.FinishPage.Link is declared only when that link exists.
     text = text.replace(old_show, (
+        "  !define MUI_PAGE_CUSTOMFUNCTION_SHOW DevTeamFinishShow\n"
+        "  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE KiroFadeOutPage\n"
+        "  !insertmacro MUI_PAGE_FINISH\n"
         "  Function DevTeamFinishShow\n"
+        "    !ifndef HIDE_RUN_AFTER_FINISH\n"
         "    SearchPath $0 \"claude.exe\"\n"
         "    StrCmp $0 \"\" 0 devteam_claude_found\n"
         "    SearchPath $0 \"claude.cmd\"\n"
@@ -357,11 +366,9 @@ def rewrite_agent_prerequisite():
         "      SendMessage $mui.FinishPage.Text ${KIRO_WM_SETTEXT} 0 \"STR:$(MUI_TEXT_FINISH_INFO_TEXT)\"\n"
         "      ShowWindow $mui.FinishPage.Link ${KIRO_SW_HIDE}\n"
         "    devteam_claude_done:\n"
+        "    !endif\n"
         "    Call KiroFadeInPage\n"
-        "  FunctionEnd\n"
-        "  !define MUI_PAGE_CUSTOMFUNCTION_SHOW DevTeamFinishShow\n"
-        "  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE KiroFadeOutPage\n"
-        "  !insertmacro MUI_PAGE_FINISH\n"))
+        "  FunctionEnd\n"))
     nsh.write_text(text, encoding="utf-8", newline="")
     n += 1
 
