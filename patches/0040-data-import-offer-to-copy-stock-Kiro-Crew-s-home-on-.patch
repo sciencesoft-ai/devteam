@@ -33,10 +33,10 @@ index a6f007397a995f599621772ef95edea585992686..5e3832cac95257d6c72151d062308752
          if detected:
 diff --git a/src/kiro_crew/data_import.py b/src/kiro_crew/data_import.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..54d0f678f9a610b059a8de4295e9dcf1790a3284
+index 0000000000000000000000000000000000000000..37d7ad4217eaea858d42a1392ce19b44b0c4c9d1
 --- /dev/null
 +++ b/src/kiro_crew/data_import.py
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,202 @@
 +"""Offer, once, to import stock Kiro Crew's data home into a downstream one.
 +
 +Only for a distribution whose data home is not upstream's (DevTeam: ``~/.devteam``),
@@ -62,6 +62,7 @@ index 0000000000000000000000000000000000000000..54d0f678f9a610b059a8de4295e9dcf1
 +import shutil
 +import socket
 +import sys
++import time
 +from collections.abc import Callable, Mapping
 +from pathlib import Path
 +from urllib.parse import urlsplit, urlunsplit
@@ -144,19 +145,59 @@ index 0000000000000000000000000000000000000000..54d0f678f9a610b059a8de4295e9dcf1
 +    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 +
 +
++# On Windows a just-written file can stay open for a moment (an antivirus scan
++# of the copied executables, the search indexer), so renaming or deleting the
++# folder that holds it raises PermissionError until the scan ends.
++_LOCK_RETRY_SECONDS = 30.0
++
++
++def _when_unlocked(
++    action: Callable[[], None],
++    *,
++    done: Callable[[], bool] = lambda: False,
++    platform: str = sys.platform,
++    retry_seconds: float = _LOCK_RETRY_SECONDS,
++    sleep: Callable[[float], None] = time.sleep,
++    clock: Callable[[], float] = time.monotonic,
++) -> None:
++    """Run *action*, retrying a transient Windows lock until *retry_seconds* pass.
++
++    *done* reports a state where retrying cannot help (the rename target exists).
++    """
++    deadline = clock() + retry_seconds
++    delay = 0.1
++    while True:
++        try:
++            action()
++            return
++        except PermissionError:
++            if platform != "win32" or done() or clock() + delay > deadline:
++                raise
++        sleep(delay)
++        delay = min(delay * 2, 2.0)
++
++
++def _remove_tree(path: Path) -> None:
++    if path.exists():
++        _when_unlocked(lambda: shutil.rmtree(path))
++
++
 +def import_home() -> Path:
 +    """Copy the source home into the (absent) target home. Raises OSError on failure."""
 +    source, target = source_home(), target_home()
 +    staging = target.with_name(target.name + ".importing")
-+    if staging.exists():
-+        shutil.rmtree(staging)
++    _remove_tree(staging)
 +    target.parent.mkdir(parents=True, exist_ok=True)
 +    try:
 +        shutil.copytree(source, staging, symlinks=True, ignore=_ignore)
 +        _repoint_dashboard_url(staging)
-+        os.replace(staging, target)
++        _when_unlocked(lambda: os.replace(staging, target), done=target.exists)
 +    except BaseException:
-+        shutil.rmtree(staging, ignore_errors=True)
++        # Report why the import failed, not why the cleanup after it did.
++        try:
++            _remove_tree(staging)
++        except OSError:
++            pass
 +        raise
 +    return target
 +
@@ -200,10 +241,10 @@ index 0000000000000000000000000000000000000000..54d0f678f9a610b059a8de4295e9dcf1
 +    return "imported"
 diff --git a/test/test_data_import.py b/test/test_data_import.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e929a6c02bedaa2fa6b6d3b7dd73b9a9110e8ef3
+index 0000000000000000000000000000000000000000..99e63ff69c56b1e45d48da6c5af45b7796cb0ae6
 --- /dev/null
 +++ b/test/test_data_import.py
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,115 @@
 +"""First-run import of a stock Kiro Crew home (``kiro_crew.data_import``)."""
 +
 +import json
@@ -257,15 +298,24 @@ index 0000000000000000000000000000000000000000..e929a6c02bedaa2fa6b6d3b7dd73b9a9
 +
 +def test_no_starts_fresh_and_is_not_asked_again(homes):
 +    _, target = homes
-+    assert data_import.offer_in_terminal(ask=lambda _: "", out=lambda _: None, interactive=True) == "fresh"
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "", out=lambda _: None, interactive=True)
++        == "fresh"
++    )
 +    assert target.is_dir() and not any(target.iterdir())
-+    assert data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True) == "skipped"
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True)
++        == "skipped"
++    )
 +
 +
 +def test_running_source_defers(homes, monkeypatch):
 +    _, target = homes
 +    monkeypatch.setattr(data_import, "source_running", lambda timeout=0.3: True)
-+    assert data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True) == "deferred"
++    assert (
++        data_import.offer_in_terminal(ask=lambda _: "y", out=lambda _: None, interactive=True)
++        == "deferred"
++    )
 +    assert not target.exists()
 +
 +
@@ -273,13 +323,49 @@ index 0000000000000000000000000000000000000000..e929a6c02bedaa2fa6b6d3b7dd73b9a9
 +    def boom(_):
 +        raise AssertionError("asked")
 +
-+    assert data_import.offer_in_terminal(ask=boom, out=lambda _: None, interactive=False) == "skipped"
++    assert (
++        data_import.offer_in_terminal(ask=boom, out=lambda _: None, interactive=False) == "skipped"
++    )
++
++
++class _Locked:
++    def __init__(self, failures: int) -> None:
++        self.failures = failures
++        self.calls = 0
++
++    def __call__(self) -> None:
++        self.calls += 1
++        if self.calls <= self.failures:
++            raise PermissionError(13, "Permission denied")
++
++
++def test_rename_retries_a_folder_a_windows_scan_holds_open():
++    action = _Locked(3)
++    data_import._when_unlocked(action, platform="win32", sleep=lambda _s: None)
++    assert action.calls == 4
++
++
++def test_rename_gives_up_once_the_retry_window_is_spent():
++    action = _Locked(10**6)
++    with pytest.raises(PermissionError):
++        data_import._when_unlocked(action, platform="win32", retry_seconds=0, sleep=lambda _s: None)
++    assert action.calls == 1
++
++
++@pytest.mark.parametrize(("platform", "target_exists"), [("linux", False), ("win32", True)])
++def test_rename_is_not_retried_off_windows_or_onto_an_existing_target(platform, target_exists):
++    action = _Locked(10**6)
++    with pytest.raises(PermissionError):
++        data_import._when_unlocked(
++            action, done=lambda: target_exists, platform=platform, sleep=lambda _s: None
++        )
++    assert action.calls == 1
 diff --git a/website/electron/data-import.js b/website/electron/data-import.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..b45f74c0a91bf9ccd9b51e8ef355f6f7b4daf8f7
+index 0000000000000000000000000000000000000000..12e7e375e242522490cc72dd19b435f57dfb8995
 --- /dev/null
 +++ b/website/electron/data-import.js
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,203 @@
 +"use strict";
 +// Desktop half of src/kiro_crew/data_import.py: on a downstream distribution's
 +// first run, with stock Kiro Crew's home present, ask once whether to copy it.
@@ -366,14 +452,40 @@ index 0000000000000000000000000000000000000000..b45f74c0a91bf9ccd9b51e8ef355f6f7
 +  fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
 +}
 +
-+function importHome(deps = {}) {
++// On Windows a just-written file can stay open for a moment (an antivirus scan
++// of the copied executables, the search indexer), so renaming or deleting the
++// folder that holds it fails with EPERM, EACCES or EBUSY until the scan ends.
++const TRANSIENT_LOCK_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
++const LOCK_RETRY_MS = 30000;
++const RM_OPTIONS = { recursive: true, force: true, maxRetries: 10, retryDelay: 200 };
++
++async function renameWhenUnlocked(from, to, {
++  fs = nodeFs,
++  platform = process.platform,
++  retryMs = LOCK_RETRY_MS,
++  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
++} = {}) {
++  const deadline = Date.now() + retryMs;
++  for (let delay = 100; ; delay = Math.min(delay * 2, 2000)) {
++    try {
++      await fs.promises.rename(from, to);
++      return;
++    } catch (error) {
++      const transient = platform === "win32" && TRANSIENT_LOCK_CODES.has(error && error.code);
++      if (!transient || fs.existsSync(to) || Date.now() + delay > deadline) throw error;
++      await wait(delay);
++    }
++  }
++}
++
++async function importHome(deps = {}) {
 +  const { fs = nodeFs, path = nodePath } = deps;
 +  const { source, target } = homes(deps);
 +  const staging = target + ".importing";
-+  fs.rmSync(staging, { recursive: true, force: true });
++  await fs.promises.rm(staging, RM_OPTIONS);
 +  fs.mkdirSync(path.dirname(target), { recursive: true });
 +  try {
-+    fs.cpSync(source, staging, {
++    await fs.promises.cp(source, staging, {
 +      recursive: true,
 +      verbatimSymlinks: true,
 +      filter: (src) => {
@@ -382,9 +494,10 @@ index 0000000000000000000000000000000000000000..b45f74c0a91bf9ccd9b51e8ef355f6f7
 +      },
 +    });
 +    repointDashboardUrl(staging, deps);
-+    fs.renameSync(staging, target);
++    await renameWhenUnlocked(staging, target, deps);
 +  } catch (error) {
-+    fs.rmSync(staging, { recursive: true, force: true });
++    // Report why the import failed, not why the cleanup after it did.
++    await fs.promises.rm(staging, RM_OPTIONS).catch(() => {});
 +    throw error;
 +  }
 +  return target;
@@ -437,7 +550,7 @@ index 0000000000000000000000000000000000000000..b45f74c0a91bf9ccd9b51e8ef355f6f7
 +    }
 +  }
 +  try {
-+    importHome(deps);
++    await importHome(deps);
 +    log("data-import: imported " + source);
 +    return "imported";
 +  } catch (error) {
@@ -453,7 +566,9 @@ index 0000000000000000000000000000000000000000..b45f74c0a91bf9ccd9b51e8ef355f6f7
 +  }
 +}
 +
-+module.exports = { offerDataImport, shouldOffer, importHome, startFresh, repointDashboardUrl, sourceRunning };
++module.exports = {
++  offerDataImport, shouldOffer, importHome, startFresh, repointDashboardUrl, sourceRunning, renameWhenUnlocked,
++};
 diff --git a/website/electron/main.js b/website/electron/main.js
 index b81a6d234a5d66f0dd10b5f4707898af12f252f8..4e31b68f29f5055e07686b4db5d7ad9c1fe676de 100644
 --- a/website/electron/main.js
@@ -487,10 +602,10 @@ index 24894c325de8051f6b3ea50c3b7a806475fe1239..b09455f9e52c87aa94e510dcb5a67932
        "runtime/gateway/launch-preflight.js",
 diff --git a/website/electron/test/data-import.test.js b/website/electron/test/data-import.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..2f1111db1be5c4c9a089be6cd3af731e236475bf
+index 0000000000000000000000000000000000000000..2aeef7cfbbb8559d02b7f6b4a88e402c811c91df
 --- /dev/null
 +++ b/website/electron/test/data-import.test.js
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,88 @@
 +"use strict";
 +const { describe, it, beforeEach, afterEach } = require("node:test");
 +const assert = require("node:assert/strict");
@@ -498,7 +613,7 @@ index 0000000000000000000000000000000000000000..2f1111db1be5c4c9a089be6cd3af731e
 +const os = require("os");
 +const path = require("path");
 +const DISTRIBUTION = require("../distribution");
-+const { shouldOffer, importHome, startFresh } = require("../data-import");
++const { shouldOffer, importHome, startFresh, renameWhenUnlocked } = require("../data-import");
 +
 +const upstream = DISTRIBUTION.DATA_HOME_PARTS.join("/") === ".kiro/crew";
 +
@@ -523,13 +638,54 @@ index 0000000000000000000000000000000000000000..2f1111db1be5c4c9a089be6cd3af731e
 +    assert.equal(shouldOffer(deps), false);
 +  });
 +
-+  it("copies the home without runtime files and moves the port", () => {
-+    const target = importHome(deps);
++  it("copies the home without runtime files and moves the port", async () => {
++    const target = await importHome(deps);
 +    assert.ok(fs.existsSync(path.join(target, "history", "a.jsonl")));
 +    assert.ok(!fs.existsSync(path.join(target, "gateway.pid")));
 +    assert.ok(!fs.existsSync(path.join(target, "kirocrew-bin")));
 +    const url = JSON.parse(fs.readFileSync(path.join(target, "config.json"), "utf8")).dashboard.url;
 +    assert.equal(url, `http://localhost:${DISTRIBUTION.DEFAULT_PORT}`);
++  });
++});
++
++describe("data-import rename", () => {
++  const locked = () => Object.assign(new Error("EPERM, Permission denied"), { code: "EPERM" });
++  const fakeFs = (failures, { targetExists = false } = {}) => {
++    const calls = [];
++    return {
++      calls,
++      existsSync: () => targetExists,
++      promises: {
++        rename: async (from, to) => {
++          calls.push([from, to]);
++          if (calls.length <= failures) throw locked();
++        },
++      },
++    };
++  };
++  const noWait = async () => {};
++
++  it("retries a folder a Windows scan still holds open", async () => {
++    const fs = fakeFs(3);
++    await renameWhenUnlocked("a", "b", { fs, platform: "win32", wait: noWait });
++    assert.equal(fs.calls.length, 4);
++  });
++
++  it("gives up once the retry window is spent", async () => {
++    const fs = fakeFs(Infinity);
++    await assert.rejects(
++      renameWhenUnlocked("a", "b", { fs, platform: "win32", retryMs: 0, wait: noWait }),
++      { code: "EPERM" },
++    );
++    assert.equal(fs.calls.length, 1);
++  });
++
++  it("does not retry off Windows or onto an existing target", async () => {
++    for (const [platform, targetExists] of [["linux", false], ["win32", true]]) {
++      const fs = fakeFs(Infinity, { targetExists });
++      await assert.rejects(renameWhenUnlocked("a", "b", { fs, platform, wait: noWait }), { code: "EPERM" });
++      assert.equal(fs.calls.length, 1);
++    }
 +  });
 +});
 +

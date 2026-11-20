@@ -70,7 +70,7 @@ Everything DevTeam publishes outside its own install comes from the **Side-by-si
 | `CLI_NAME` | `devteam` | `kirocrew` | Command on PATH (`~/.local/bin/devteam`), bundle `bin/devteam[.cmd]`, console script, `--version`, CLI usage. No `kirocrew` is published on PATH. Agents get both names in their private `<home>/kirocrew-bin/`. |
 | `DATA_HOME` | `~/.devteam` | `~/.kiro/crew` | Default data home for the gateway, CLI and desktop app. `DEVTEAM_HOME` overrides it. Exported as `KIROCREW_HOME` at startup, so child processes use it too. The legacy `~/.kirocrew` migration is off. |
 | `GATEWAY_PORT` | `5486` | `5476` | Default dashboard and gateway port. `DEVTEAM_PORT` overrides it. Upstream treats 5476 as a lock, so two products must not share it. |
-| `ENV_PREFIX` | `DEVTEAM` | `KIROCREW` | The variables users set: `DEVTEAM_HOME`, `DEVTEAM_PORT`. A `KIROCREW_HOME` or `KIROCREW_PORT` in the user's shell is ignored (patch `0020`). |
+| `ENV_PREFIX` | `DEVTEAM` | `KIROCREW` | The variables users set: `DEVTEAM_HOME`, `DEVTEAM_PORT`, `DEVTEAM_TELEMETRY_DISABLED`. A `KIROCREW_HOME` or `KIROCREW_PORT` in the user's shell is ignored (patch `0020`). `KIROCREW_TELEMETRY_DISABLED` still turns telemetry off, so an opt-out isn't lost (patch `0030`). |
 | `DEFAULT_AGENT` | `claude` | `kas` | Harness used when `agent.acp_backend` is unset. An explicit choice is kept. |
 | `URL_SCHEME` | `devteam` | `kirocrew` | Desktop deep links. |
 | `SERVICE_NAME` | `devteam` | `kirocrew` | systemd unit, and the launchd label `dev.<name>.gateway`. |

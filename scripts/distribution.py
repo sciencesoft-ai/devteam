@@ -152,6 +152,8 @@ def write_ts(path: Path) -> None:
         f"  defaultAcpBackend: {js(agent)},\n"
         "  /** Community chat linked from the nav rail; '' hides the button. */\n"
         f"  communityUrl: {js(community)},\n"
+        "  /** Prefix of the environment variables users set (<prefix>_TELEMETRY_DISABLED, ...). */\n"
+        f"  envPrefix: {js(env_prefix)},\n"
         "} as const\n",
         encoding="utf-8",
         newline="",
@@ -234,8 +236,11 @@ edit_lockfile(ROOT / "website/electron/package-lock.json")
 edit_text(ROOT / "packaging/build-desktop.sh", "kirocrew-desktop-nightly", f"{desktop_pkg}-nightly")
 # The config baseline pins the beacon endpoint's default.
 edit_text(ROOT / "config-baseline.json", "https://d175o3ylxqum0e.cloudfront.net", telemetry)
+# ... and its help text names the telemetry opt-out variable (patch 0030).
+edit_text(ROOT / "config-baseline.json", "KIROCREW_TELEMETRY_DISABLED", f"{env_prefix}_TELEMETRY_DISABLED")
+edit_text(ROOT / "config-baseline.json", "non-default KIROCREW_HOME", f"non-default {env_prefix}_HOME")
 
 print(f"  identity: {product} | cli {cli} | home ~/{'/'.join(parts)} | port {port} | "
       f"agent {agent} | scheme {scheme}:// | service {service} | desktop {desktop_pkg} | "
-      f"env {env_prefix}_HOME/_PORT | telemetry {telemetry} | feedback {feedback} | "
+      f"env {env_prefix}_HOME/_PORT/_TELEMETRY_DISABLED |telemetry {telemetry} | feedback {feedback} | "
       f"community {community or '(hidden)'}")
