@@ -93,9 +93,7 @@ def rewrite_text(text, rules=ALL):
 
 
 TEST = re.compile(r"(^|/)(test|tests|__tests__|e2e|playwright|fixtures|mocks?)(/|$)|\.(test|spec|stories)\.|(^|/)test_[^/]*\.py$|_test\.py$|conftest\.py$")
-# data_import names stock Kiro Crew on purpose: it imports that product's data.
-SKIP_PY = re.compile(r"^src/kiro_crew/(security/|sandbox[^/]*\.py$|hooks\.py$|hook_runtime/|docs/|_distribution\.py$|data_import\.py$)")
-SKIP_JS = {"website/electron/data-import.js"}
+SKIP_PY = re.compile(r"^src/kiro_crew/(security/|sandbox[^/]*\.py$|hooks\.py$|hook_runtime/|docs/|_distribution\.py$)")
 LOGGER = re.compile(r"^(logger|log|_log|_logger|LOGGER|logging)$")
 LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
 
@@ -462,8 +460,7 @@ def main():
     # Dashboard + desktop shell code
     js = [p for p in git_files("website/src", "website/electron")
           if re.search(r"\.(ts|tsx|js|cjs|mjs|jsx)$", p) and "/node_modules/" not in p
-          and not p.startswith(("website/electron/scripts/", "website/src/i18n/locales/")) and not p.endswith(".d.ts")
-          and p not in SKIP_JS]
+          and not p.startswith(("website/electron/scripts/", "website/src/i18n/locales/")) and not p.endswith(".d.ts")]
     rules_file = ROOT.parent / ".strings-rules.expanded.json"
     rules_file.write_text(json.dumps(RULES), encoding="utf-8", newline="")
     r = subprocess.run(["node", str(HERE / "strings/rewrite_js.js"), str(rules_file)],

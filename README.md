@@ -83,12 +83,7 @@ How it's applied: patch `0010` makes upstream read these values from `src/kiro_c
 
 How `DEVTEAM_HOME` / `DEVTEAM_PORT` work: internally the code still reads `KIROCREW_*`. The first DevTeam process started from a plain shell (CLI, desktop app or service) drops any `KIROCREW_HOME` / `KIROCREW_PORT`, copies the `DEVTEAM_*` values into them, and sets `DEVTEAM_ENV_MAPPED=1`. Processes DevTeam starts inherit that mark and keep the values their parent gave them. `devteam service install` saves the port as `DEVTEAM_PORT` in the unit.
 
-**Importing Kiro Crew data** (patch `0040`). On DevTeam's first run, when `~/.devteam` doesn't exist and `~/.kiro/crew/config.json` does, DevTeam asks once whether to copy that data over:
-
-- the desktop app shows a dialog before the gateway starts;
-- the CLI asks in an interactive terminal (scripts and services are never asked).
-
-Import copies everything except Kiro Crew's runtime files (pid, lock and socket files, `kirocrew-bin/`) and moves `dashboard.url` to DevTeam's port. It waits while Kiro Crew is running. Kiro Crew keeps its own copy. "Start fresh" creates an empty `~/.devteam`, so the question doesn't come back. Paths inside the copied config that point into `~/.kiro/crew` are not rewritten.
+DevTeam never reads or imports stock Kiro Crew's data: it starts with an empty `~/.devteam`.
 
 Still shared with stock Kiro Crew: kiro-cli's own `~/.kiro` (agents, settings). It belongs to kiro-cli, and only the Kiro or KAS backends use it.
 
@@ -139,7 +134,7 @@ git add patches && git commit
 3. If a patch fails, run `scripts/patch-dev.sh`, resolve the conflict, then `scripts/export-patches.sh`.
 4. If a rebrand rule fails, upstream moved or renamed the value. Update `scripts/rebrand.sh`.
 
-Versions are labelled `<upstream tag>+devteam.<DEVTEAM_RELEASE>`, for example `v0.12.2+devteam.1`. Bump `DEVTEAM_RELEASE` for each DevTeam-only release on the same upstream tag.
+Versions are labelled `<upstream version>-<DEVTEAM_RELEASE>`, for example `0.12.2-1`. CI artifacts are named `DevTeam-<version>` (wheel) and `DevTeam-<version>-windows-x64` (installer). The installer file inside keeps electron-builder's name, `DevTeam Setup 0.12.2.exe`, because `latest.yml` points the updater at it. Bump `DEVTEAM_RELEASE` for each DevTeam-only release on the same upstream tag.
 
 ## Before the first public release
 
