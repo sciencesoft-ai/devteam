@@ -448,6 +448,32 @@ def rewrite_agent_prerequisite():
     return n
 
 
+LOADING_GHOST = re.compile(r"    var GHOST_SVG =\r?\n.*?'</svg></div></div></div>';\r?\n", re.S)
+
+
+def rewrite_loading_character():
+    """The desktop loading screen draws Kiro's ghost inline (GHOST_SVG). Swap in
+    DevTeam's character (scripts/brand_assets.py -> rebrand/loading-character.json),
+    keeping the page's structure: a white body path and a .g-eyes group it blinks."""
+    path = ROOT / "website/electron/loading.html"
+    text = path.read_text(encoding="utf-8")
+    if len(LOADING_GHOST.findall(text)) != 1:
+        sys.exit("rewrite_strings: loading.html GHOST_SVG changed upstream; update rewrite_loading_character()")
+    c = json.loads((HERE.parent / "rebrand/loading-character.json").read_text(encoding="utf-8"))
+    eyes = "".join(f"          '<path d=\"{d}\" fill=\"#000000\"/>' +\n" for d in c["eyes"])
+    block = ("    var GHOST_SVG =\n"
+             "      '<div class=\"float\"><div class=\"tilt\"><div class=\"pop\"><svg class=\"g-svg\" "
+             f"viewBox=\"{c['viewBox']}\" fill=\"none\" aria-hidden=\"true\">' +\n"
+             f"        '<path d=\"{c['body']}\" fill=\"#ffffff\"/>' +\n"
+             "        '<g class=\"g-eyes\">' +\n" + eyes +
+             "        '</g>' +\n"
+             "      '</svg></div></div></div>';\n")
+    if "\r\n" in text:  # a Windows checkout
+        block = block.replace("\n", "\r\n")
+    path.write_text(LOADING_GHOST.sub(lambda _m: block, text), encoding="utf-8", newline="")
+    return 1
+
+
 def main():
     total = {}
     # Python sources (backend, CLI, built-in skills' scripts)
@@ -487,6 +513,7 @@ def main():
     total["desktop package"] = int(new != data)
     total["catalog files"] = rewrite_catalogs()
     total["agent prerequisite"] = rewrite_agent_prerequisite()
+    total["loading character"] = rewrite_loading_character()
     print("  strings: " + ", ".join(f"{k} {v}" for k, v in total.items()))
     regenerate_indexes()
 
