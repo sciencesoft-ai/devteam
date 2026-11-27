@@ -104,7 +104,9 @@ Still shared with stock Kiro Crew: kiro-cli's own `~/.kiro` (agents, settings). 
 | `KIROCREW_HOME` / `KIROCREW_PORT` in CLI help and error text | `DEVTEAM_HOME` / `DEVTEAM_PORT` | `ENV_TEXT_*` in `rewrite_strings.py` |
 | The feedback survey's "sent to the Kiro Crew team" | `PRODUCT_NAME`: answers now go to our endpoint | `recipient_keys` in `rebrand/i18n-keep.json` |
 | The installer's "default agent requires Kiro CLI" page and the install scripts | A check for Claude Code. If it's found, the standard "installed" text; if not, a pointer to its setup guide. Only when `DEFAULT_AGENT=claude` | `rewrite_agent_prerequisite()` |
-| Kiro's ghost in the app icon, installer, avatars, onboarding and loading screen | The striped "D" and DevTeam's agent character, in ScienceSoft colours | `scripts/brand_assets.py` → `overlay/`; loading screen: `rewrite_loading_character()` |
+| Kiro's ghost in the app icon, installer, avatars, onboarding and loading screen | The striped "D" and DevTeam's agent character, in ScienceSoft colours | `scripts/brand_assets.py` → `overlay/`; inline drawings (loading screen, onboarding panel, welcome view): `rewrite_loading_character()`, `rewrite_kiro_ghost_component()` |
+| Kiro purple: the default theme (`kiro`, labelled "ScienceSoft"), the default avatar tile, the share card, the loading screen's first colour | ScienceSoft blues: accent `#005EB8` (light) / `#1A8FFF` (dark), Crew mode in navy / teal | `rebrand/brand-colors.json`, `rewrite_brand_colors()` |
+| The import panel headline "Bring your crew with you." | "Build your team with setup you already use.", in all 12 languages | `rebrand/i18n-overrides.json` |
 
 Some text is deliberately left alone:
 

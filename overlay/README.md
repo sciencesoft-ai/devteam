@@ -31,9 +31,11 @@ python scripts/brand_assets.py
 | `website/src/assets/kiro-file-chomper.png` | Shown when a file is dragged onto a chat |
 | `website/src/assets/product-mark.svg` | The product's nav glyph (patch `0050`; Kiro harnesses keep Kiro's logo) |
 
-The desktop loading screen draws its character inline, so it isn't a file here:
-`rewrite_strings.py` swaps it in from `rebrand/loading-character.json`, which
-the same script writes.
+Two places draw the character inline, so they aren't files here: the desktop
+loading screen and `KiroGhost.tsx` (the onboarding panel, the welcome view,
+Crew mode). `rewrite_strings.py` swaps both from `rebrand/loading-character.json`,
+which the same script writes. Colours are not artwork: the default theme and the
+other purples are set by `rebrand/brand-colors.json`.
 
 Masters for documents and slides are in `brand/`: the app icon, the nav mark,
 the "DevTeam / ScienceSoft AI" lockup and the character.

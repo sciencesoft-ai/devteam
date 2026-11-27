@@ -151,18 +151,18 @@
  },
  "components.avatarBuilder.tile_purple": {
   "upstream_en": "Kiro purple",
-  "en": "Purple",
-  "de": "Lila",
-  "es": "Púrpura",
-  "fr": "Violet",
-  "it": "Viola",
-  "pt": "Roxo",
-  "ru": "Фиолетовый",
-  "ja": "パープル",
-  "ko": "퍼플",
-  "zh-CN": "紫色",
-  "hi": "बैंगनी",
-  "bn": "বেগুনি"
+  "en": "Blue",
+  "de": "Blau",
+  "es": "Azul",
+  "fr": "Bleu",
+  "it": "Blu",
+  "pt": "Azul",
+  "ru": "Синий",
+  "ja": "ブルー",
+  "ko": "블루",
+  "zh-CN": "蓝色",
+  "hi": "नीला",
+  "bn": "নীল"
  },
  "pages.scenes.config.ghost_label": {
   "upstream_en": "Kiro Haunt",
@@ -253,5 +253,20 @@
   "zh-CN": "GitHub 上的 {{productName}}",
   "hi": "GitHub पर {{productName}}",
   "bn": "GitHub-এ {{productName}}"
+ },
+ "components.agentImportFlow.bring_your_crew_with_you": {
+  "upstream_en": "Bring your crew with you.",
+  "en": "Build your team with setup you already use.",
+  "de": "Bauen Sie Ihr Team mit dem Setup auf, das Sie schon nutzen.",
+  "es": "Crea tu equipo con la configuración que ya usas.",
+  "fr": "Créez votre équipe avec la configuration que vous utilisez déjà.",
+  "it": "Crea il tuo team con la configurazione che usi già.",
+  "pt": "Monte a sua equipe com a configuração que você já usa.",
+  "ru": "Соберите свою команду из настроек, которыми вы уже пользуетесь.",
+  "ja": "今お使いのセットアップでチームを作りましょう。",
+  "ko": "이미 쓰고 있는 설정으로 팀을 만드세요.",
+  "zh-CN": "用你已有的配置组建你的团队。",
+  "hi": "जो सेटअप आप पहले से इस्तेमाल करते हैं, उसी से अपनी टीम बनाएँ।",
+  "bn": "যে সেটআপ আপনি আগে থেকেই ব্যবহার করেন, তা দিয়েই আপনার টিম গড়ুন।"
  }
 }

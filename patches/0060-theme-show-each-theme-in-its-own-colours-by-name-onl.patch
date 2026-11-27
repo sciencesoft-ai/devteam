@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 27 Nov 2026 23:34:16 +0300
+Subject: [PATCH] theme: show each theme in its own colours, by name only
+
+The onboarding theme grid painted every chip the same, with an emoji
+standing in for the theme. Paint each chip in its theme's own accent
+(the chip carries the theme's data-theme, so its CSS variables resolve
+to that palette) and drop the leading glyph from theme names in every
+picker; the colour now identifies the theme.
+
+diff --git a/website/src/components/OnboardingFlow.tsx b/website/src/components/OnboardingFlow.tsx
+index eb3f08c3bb565eda5751a187d77ec556a49f3bbd..9d77fe89a5fe8d914f90f5673ab37d5a0cd19406 100644
+--- a/website/src/components/OnboardingFlow.tsx
++++ b/website/src/components/OnboardingFlow.tsx
+@@ -157,6 +157,11 @@ const RING_SHADOW = '0 20px 50px rgba(0,0,0,.42), 0 0 0 4px var(--accent-subtle)
+ // 20% opacity tint of the active theme accent — used for selected states.
+ const ACCENT_20 = 'color-mix(in srgb, var(--accent) 20%, transparent)'
+ 
++// The `data-theme` a theme's palette is keyed on: `themeDataAttribute()`'s rule
++// (emerald is the bare mode, every other theme `<slug>-<mode>`), restated here
++// because many tests mock `useTheme` without that helper.
++const chipTheme = (value: string, mode: string) => (value === 'emerald' ? mode : `${value}-${mode}`)
++
+ 
+ /**
+  * The same Translucent panels switch as Settings -> Display -> View
+@@ -237,6 +242,7 @@ export default function OnboardingFlow({
+     allThemes,
+     preference: modePref,
+     setTheme: setModePref,
++    theme: resolvedMode,
+   } = useTheme()
+   const [open, setOpen] = useState(initialOpen)
+   const [step, setStep] = useState(() => (initialOpen ? resumedStep() : 1))
+@@ -668,12 +674,17 @@ export default function OnboardingFlow({
+               type="button"
+               onClick={() => setColorTheme(t.value as ColorTheme)}
+               {...radioChip(colorTheme === t.value)}
+-              className={`focus-ring-accent flex min-w-0 items-center justify-center gap-1.5 truncate rounded-lg border px-2 py-1.5 text-[13px] cursor-pointer transition-colors ${
+-                colorTheme === t.value
+-                  ? 'border-accent font-medium'
+-                  : 'border-border bg-transparent text-text hover:text-text-strong'
++              // The chip carries its theme's own palette (CSS keys every theme on
++              // `data-theme`, on any element), so it previews the theme it picks.
++              data-theme={chipTheme(t.value, resolvedMode ?? 'light')}
++              className={`focus-ring-accent flex min-w-0 items-center justify-center gap-1.5 truncate rounded-lg border-2 px-2 py-1.5 text-[13px] cursor-pointer transition-[filter,border-color] hover:brightness-110 ${
++                colorTheme === t.value ? 'font-semibold' : 'border-transparent'
+               }`}
+-              style={colorTheme === t.value ? { background: ACCENT_20, color: 'var(--accent)' } : undefined}
++              style={{
++                background: 'var(--accent)',
++                color: 'var(--accent-fg)',
++                ...(colorTheme === t.value ? { borderColor: 'var(--text-strong)' } : {}),
++              }}
+             >
+               {t.label}
+             </button>
+diff --git a/website/src/hooks/useTheme.tsx b/website/src/hooks/useTheme.tsx
+index 4887a1f680068cda3fd5c239d0f7ddf4342ef9d1..7b1cd6426e8a29911329f876cd95d7a38c9b85b7 100644
+--- a/website/src/hooks/useTheme.tsx
++++ b/website/src/hooks/useTheme.tsx
+@@ -442,6 +442,16 @@ export const THEMES: ThemeEntry[] = [
+  * cannot. An entry with no `THEME_LABEL_KEY` entry is passed through untouched:
+  * its name is a proper noun and has no catalog key by design.
+  */
++/**
++ * A theme's display name without its leading glyph ("🌿 Emerald" -> "Emerald").
++ * The pickers show each theme in its own colours (OnboardingFlow), so the name
++ * alone identifies it; a glyph-only fallback label is kept rather than emptied.
++ */
++export function themeName(label: string): string {
++  const name = label.replace(/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D\s]+/u, '')
++  return name || label
++}
++
+ function builtinThemes(): ThemeEntry[] {
+   return THEMES.map((t) =>
+     // `hasOwnProperty`, not `in`: theme values also arrive from persisted config
+@@ -449,8 +459,8 @@ function builtinThemes(): ThemeEntry[] {
+     // would otherwise resolve to an inherited Object.prototype member and hand a
+     // function to i18next.
+     Object.prototype.hasOwnProperty.call(THEME_LABEL_KEY, t.value)
+-      ? { ...t, label: i18nT(THEME_LABEL_KEY[t.value]) }
+-      : t,
++      ? { ...t, label: themeName(i18nT(THEME_LABEL_KEY[t.value])) }
++      : { ...t, label: themeName(t.label) },
+   )
+ }
+ 
+diff --git a/website/src/test/colorBlindTheme.test.tsx b/website/src/test/colorBlindTheme.test.tsx
+index a536132068627eb2a78992ac7fb38221cab90547..b707e4deb7482e12f5625c45ae317b21ceb767e6 100644
+--- a/website/src/test/colorBlindTheme.test.tsx
++++ b/website/src/test/colorBlindTheme.test.tsx
+@@ -268,6 +268,7 @@ describe('Color-blind safe picker label', () => {
+     )
+     const { result } = renderHook(() => useTheme(), { wrapper })
+     const entry = result.current.allThemes.find((t) => t.value === 'colorblind')
+-    expect(entry?.label).toBe('👁️ Color-blind safe')
++    // The picker shows the name alone; the catalog value above keeps its glyph.
++    expect(entry?.label).toBe('Color-blind safe')
+   })
+ })
