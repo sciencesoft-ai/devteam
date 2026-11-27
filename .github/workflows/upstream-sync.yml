@@ -30,6 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # prepare.sh needs both: Python for the identity/text steps, Node for the
+      # JS/TS text rewrite.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Look for a newer stable upstream tag
         id: check
         run: |

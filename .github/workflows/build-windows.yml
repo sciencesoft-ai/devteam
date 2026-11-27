@@ -122,7 +122,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: devteam-${{ steps.ver.outputs.version }}-windows-x64
+          name: DevTeam-${{ steps.ver.outputs.version }}-windows-x64
           path: |
             work/kirocrew/website/electron/dist/*.exe
             work/kirocrew/website/electron/dist/*.exe.blockmap

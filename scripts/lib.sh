@@ -17,7 +17,7 @@ PYTHON="${PYTHON:-python3}"
 log()  { printf '\033[1;36m[devteam]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[devteam] error:\033[0m %s\n' "$*" >&2; exit 1; }
 
-devteam_version() { echo "${UPSTREAM_REF}+devteam.${DEVTEAM_RELEASE}"; }
+devteam_version() { echo "${UPSTREAM_REF#v}-${DEVTEAM_RELEASE}"; }
 
 # Patches in apply order (numeric file-name prefix).
 patch_list() { find "$PATCH_DIR" -maxdepth 1 -name '*.patch' | sort; }

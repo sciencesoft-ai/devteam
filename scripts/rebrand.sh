@@ -19,7 +19,12 @@ source "$(dirname "$0")/lib.sh"
 UPD_OLD="https://updates.crew.kiro.dev"
 DL_OLD="https://download.crew.kiro.dev"
 
+# install.sh (the pip/curl route) resolves the data home and port itself.
+INSTALL_HOME="\$HOME/${DATA_HOME#\~/}"
+
 RULES="$(cat <<EOF
+install.sh	KIROCREW_DATA_DIR="\${KIROCREW_HOME:-\$HOME/.kiro/crew}"	KIROCREW_DATA_DIR="\${${ENV_PREFIX}_HOME:-$INSTALL_HOME}"
+install.sh	KIROCREW_PORT="\${KIROCREW_PORT:-5476}"	KIROCREW_PORT="\${${ENV_PREFIX}_PORT:-$GATEWAY_PORT}"
 src/kiro_crew/platform/update_layout.py	$UPD_OLD	$UPDATE_FEED_BASE
 src/kiro_crew/platform/update_layout.py	$DL_OLD	$DOWNLOAD_BASE
 website/electron/auto-update.js	$UPD_OLD	$UPDATE_FEED_BASE
@@ -35,6 +40,7 @@ website/electron/package.json	"productName": "KiroCrew"	"productName": "$PRODUCT
 website/electron/package.json	"Amazon Web Services, Inc."	"$WIN_PUBLISHER_NAME"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew Nightly"	PRODUCT_NAME="$PRODUCT_NAME Nightly"
 packaging/build-desktop.sh	PRODUCT_NAME="KiroCrew"	PRODUCT_NAME="$PRODUCT_NAME"
+packaging/build-desktop.sh	KiroCrew Nightly	$PRODUCT_NAME Nightly
 website/electron/package.json	"maintainer": "Kiro Crew Maintainers <maintainers@crew.kiro.dev>"	"maintainer": "$PACKAGE_MAINTAINER"
 website/electron/package.json	"sign": "./scripts/sign-windows.js",	
 website/electron/main.js	"com.amazon.kiro.crew.nightly"	"$APP_ID.nightly"

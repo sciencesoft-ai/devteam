@@ -59,7 +59,60 @@ WIN_CSC_LINK=/c/path/devteam-codesign.pfx WIN_CSC_KEY_PASSWORD=... bash packagin
 4. **Patch:** a logic change that is small and covers one concern.
 5. **Upstream PR:** if a patch only adds an option or a hook, send it upstream from the fork and delete the patch once a release includes it.
 
-Leave the internal names alone: `KIROCREW_*` env vars, `~/.kiro/crew`, the `kiro_crew` package and the `kirocrew` command. Renaming them would conflict on every sync.
+Leave the internal names alone: `KIROCREW_*` env vars, the `kiro_crew` package, the in-install `kirocrew` launcher, the MCP server and default-agent id `kirocrew`. Renaming them would conflict on every sync. What DevTeam *publishes* is configured instead (next section).
+
+## Side by side with stock Kiro Crew
+
+Everything DevTeam publishes outside its own install comes from the **Side-by-side install** section of `devteam.conf`. That lets a machine run DevTeam and Kiro Crew together, and it lets a different distribution change these values without touching patches.
+
+| Setting | DevTeam | Upstream | What it controls |
+|---|---|---|---|
+| `CLI_NAME` | `devteam` | `kirocrew` | Command on PATH (`~/.local/bin/devteam`), bundle `bin/devteam[.cmd]`, console script, `--version`, CLI usage. No `kirocrew` is published on PATH. Agents get both names in their private `<home>/kirocrew-bin/`. |
+| `DATA_HOME` | `~/.devteam` | `~/.kiro/crew` | Default data home for the gateway, CLI and desktop app. `DEVTEAM_HOME` overrides it. Exported as `KIROCREW_HOME` at startup, so child processes use it too. The legacy `~/.kirocrew` migration is off. |
+| `GATEWAY_PORT` | `5486` | `5476` | Default dashboard and gateway port. `DEVTEAM_PORT` overrides it. Upstream treats 5476 as a lock, so two products must not share it. |
+| `ENV_PREFIX` | `DEVTEAM` | `KIROCREW` | The variables users set: `DEVTEAM_HOME`, `DEVTEAM_PORT`, `DEVTEAM_TELEMETRY_DISABLED`. A `KIROCREW_HOME` or `KIROCREW_PORT` in the user's shell is ignored (patch `0020`). `KIROCREW_TELEMETRY_DISABLED` still turns telemetry off, so an opt-out isn't lost (patch `0030`). |
+| `DEFAULT_AGENT` | `claude` | `kas` | Harness used when `agent.acp_backend` is unset. An explicit choice is kept. |
+| `URL_SCHEME` | `devteam` | `kirocrew` | Desktop deep links. |
+| `SERVICE_NAME` | `devteam` | `kirocrew` | systemd unit, and the launchd label `dev.<name>.gateway`. |
+| `DESKTOP_PACKAGE_NAME` | `devteam-desktop` | `kirocrew-desktop` | Desktop app data folder (`%APPDATA%\devteam-desktop`, `~/.config/devteam-desktop`) and Linux executable. |
+| `TELEMETRY_ENDPOINT` | placeholder | Kiro's collector | Anonymous usage beacon, and App install receipts, which reuse it (patch `0030`). |
+| `FEEDBACK_ENDPOINT` | placeholder | AWS-hosted Kiro feedback | In-app feedback survey: `POST <endpoint>/form` and `<endpoint>/form/prompt`, in the AWS Aperture form API shape (patch `0030`). |
+| `COMMUNITY_URL` | empty (hidden) | Kiro's Discord | Community button in the nav rail (patch `0030`). |
+
+How it's applied: patch `0010` makes upstream read these values from `src/kiro_crew/_distribution.py`, `website/electron/distribution.js` and `website/src/distribution.ts`, which hold upstream's values. `scripts/distribution.py` regenerates all three from `devteam.conf` during `prepare.sh`, and updates the packaging metadata to match.
+
+How `DEVTEAM_HOME` / `DEVTEAM_PORT` work: internally the code still reads `KIROCREW_*`. The first DevTeam process started from a plain shell (CLI, desktop app or service) drops any `KIROCREW_HOME` / `KIROCREW_PORT`, copies the `DEVTEAM_*` values into them, and sets `DEVTEAM_ENV_MAPPED=1`. Processes DevTeam starts inherit that mark and keep the values their parent gave them. `devteam service install` saves the port as `DEVTEAM_PORT` in the unit.
+
+DevTeam never reads or imports stock Kiro Crew's data: it starts with an empty `~/.devteam`.
+
+Still shared with stock Kiro Crew: kiro-cli's own `~/.kiro` (agents, settings). It belongs to kiro-cli, and only the Kiro or KAS backends use it.
+
+## User-visible text
+
+`scripts/rewrite_strings.py` runs at the end of `prepare.sh`. It rewrites only text people read: string literals (never comments, docstrings or identifiers), dashboard catalog values in all 12 languages, HTML pages, the installer and the install scripts.
+
+| What | Becomes | Where it's defined |
+|---|---|---|
+| "Kiro Crew" / "KiroCrew" in prose | `PRODUCT_NAME` | `rebrand/strings-rules.json` |
+| `kirocrew <command>` hints | `CLI_NAME <command>` | `rebrand/strings-rules.json` |
+| Kiro Crew's GitHub repo, issues, discussions | `REPO_URL` (source and doc links go to `SOURCE_REPO_URL`) | `rebrand/strings-rules.json` |
+| Kiro's Discord links in text | `REPO_URL/discussions` (DevTeam has no Discord) | `rebrand/strings-rules.json` |
+| "Kiro" as the agent's name ("Things Kiro made for you") | `ASSISTANT_NAME` ("Things DevOps made for you"), in every language, starting from upstream's own translation | `rebrand/i18n-assistant-name.json` |
+| "Kiro's Chromium" and Kiro-branded art names | Neutral wording ("built-in Chromium") | `rebrand/i18n-overrides.json`, per key and per language |
+| `KIROCREW_HOME` / `KIROCREW_PORT` in CLI help and error text | `DEVTEAM_HOME` / `DEVTEAM_PORT` | `ENV_TEXT_*` in `rewrite_strings.py` |
+| The feedback survey's "sent to the Kiro Crew team" | `PRODUCT_NAME`: answers now go to our endpoint | `recipient_keys` in `rebrand/i18n-keep.json` |
+| The installer's "default agent requires Kiro CLI" page and the install scripts | A check for Claude Code. If it's found, the standard "installed" text; if not, a pointer to its setup guide. Only when `DEFAULT_AGENT=claude` | `rewrite_agent_prerequisite()` |
+
+Some text is deliberately left alone:
+
+- **Kiro service text** (Kiro CLI, Kiro sign-in, Kiro credits, KAS). It's accurate for anyone who picks the Kiro backend.
+- **Working service URLs** (the App catalog, Kiro sign-in endpoints, kiro-cli downloads, speech model downloads, the cloud bootstrap's git clone). Changing them would break features.
+- **Links to specific upstream issues and PRs.**
+- **Security and sandbox modules.** Their strings include patterns the checks match on, so rewriting them could weaken a rule.
+- **Log messages and `src/kiro_crew/docs/`.** Planned for a later PR.
+- **"Kiro Crew's official catalog"** in the install-receipt disclosure. Receipts are sent when you install from that catalog, which DevTeam still uses.
+
+The overrides and the agent-name keys record the English text they were written against. If upstream rewords one of those strings, `prepare.sh` fails and names the key, so the translation can be reviewed rather than silently replacing the new text.
 
 ## Editing patches
 
@@ -81,7 +134,7 @@ git add patches && git commit
 3. If a patch fails, run `scripts/patch-dev.sh`, resolve the conflict, then `scripts/export-patches.sh`.
 4. If a rebrand rule fails, upstream moved or renamed the value. Update `scripts/rebrand.sh`.
 
-Versions are labelled `<upstream tag>+devteam.<DEVTEAM_RELEASE>`, for example `v0.12.2+devteam.1`. Bump `DEVTEAM_RELEASE` for each DevTeam-only release on the same upstream tag.
+Versions are labelled `<upstream version>-<DEVTEAM_RELEASE>`, for example `0.12.2-1`. CI artifacts are named `DevTeam-<version>` (wheel) and `DevTeam-<version>-windows-x64` (installer). The installer file inside keeps electron-builder's name, `DevTeam Setup 0.12.2.exe`, because `latest.yml` points the updater at it. Bump `DEVTEAM_RELEASE` for each DevTeam-only release on the same upstream tag.
 
 ## Before the first public release
 
@@ -91,10 +144,18 @@ Versions are labelled `<upstream tag>+devteam.<DEVTEAM_RELEASE>`, for example `v
 - [ ] macOS signing and notarization (Apple Developer ID), wheel signing keys, and a release workflow that publishes to the update feed.
 - [ ] DevTeam icons and banner in `overlay/` (paths below).
 - [ ] `PACKAGE_MAINTAINER` in `devteam.conf`.
-- [ ] Decide on the `kirocrew://` URL scheme. It is left unchanged for now because the app's code uses it.
-- [ ] Telemetry: upstream ships it **off** by default (`telemetry` config section). Keep it off, or point the beacon endpoint at our own collector.
+- [x] URL scheme: `devteam://` (`URL_SCHEME`).
+- [ ] Our own telemetry and feedback collectors in `devteam.conf` (`TELEMETRY_ENDPOINT`, `FEEDBACK_ENDPOINT`). The `.invalid` placeholders send nothing anywhere. The feedback collector must accept the AWS Aperture form API shape that `dashboard/handlers/feedback.py` posts.
 - [ ] About 13 upstream test files pin Kiro's update hosts and appId. `scripts/build.sh test` fails on those until they are patched or skipped.
 - [ ] Apache-2.0: keep upstream `LICENSE`, `NOTICE` and `THIRD-PARTY-NOTICES` in what we ship. `patches/` documents our modifications. Don't ship Kiro or AWS names or logos as our branding.
+
+## Ownership
+
+The maintainer owns:
+
+- reviewing and merging PRs;
+- the translation review when an upstream sync fails on a reworded override or agent-name key;
+- the manual check before a release that DevTeam and stock Kiro Crew run side by side on one machine (ports, data folders, deep links, CLI).
 
 ## CI secrets
 

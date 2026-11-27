@@ -1,0 +1,328 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Serge A. Salamanka" <ssalamanka@scnsoft.com>
+Date: Fri, 20 Nov 2026 02:04:33 +0300
+Subject: [PATCH] distribution: read telemetry, feedback and community URLs
+ from it
+
+The usage beacon (and the App install receipts that reuse it), the
+session-pulse survey's ingestion and prompt endpoints and the nav
+rail's community link now come from the distribution modules, so a
+downstream build can point its telemetry at its own collector and
+hide a community it does not run (communityUrl '' hides the button).
+Upstream values are unchanged.
+
+diff --git a/src/kiro_crew/_distribution.py b/src/kiro_crew/_distribution.py
+index ee1faad4057da4a0238fee1ded360cbd9fecda12..26ef9a3abb89da14bc8d773db22ba4f389337a5a 100644
+--- a/src/kiro_crew/_distribution.py
++++ b/src/kiro_crew/_distribution.py
+@@ -50,5 +50,14 @@ URL_SCHEME = "kirocrew"
+ SERVICE_NAME = "kirocrew"
+ LAUNCHD_LABEL = "dev.kirocrew.gateway"
+ 
++#: Default endpoint of the anonymous usage beacon, which App install receipts reuse
++#: (``telemetry.beacon_endpoint`` overrides it; "" turns both off).
++BEACON_ENDPOINT = "https://d175o3ylxqum0e.cloudfront.net"
++
++#: Where the in-app session-pulse survey posts answers, and where it asks whether to
++#: show itself (``dashboard/handlers/feedback.py``).
++FEEDBACK_INGESTION_URL = "https://ingestion.aperture-public-api.feedback.console.aws.dev/form"
++FEEDBACK_PROMPT_URL = "https://prompt.aperture-public-api.feedback.console.aws.dev/form/prompt"
++
+ #: npm package names of the desktop app (stable, nightly).
+ DESKTOP_PACKAGE_NAMES = ("kirocrew-desktop", "kirocrew-desktop-nightly")
+diff --git a/src/kiro_crew/beacon.py b/src/kiro_crew/beacon.py
+index 95234af5a4a262a2b5c8211f34f1ccb90c1375c8..e341244b6dccb172e129bb19650d78a0044edbc0 100644
+--- a/src/kiro_crew/beacon.py
++++ b/src/kiro_crew/beacon.py
+@@ -99,6 +99,7 @@ from typing import NamedTuple
+ 
+ from kiro_crew import platform_compat
+ from kiro_crew.atomic_write import atomic_write
++from kiro_crew import _distribution
+ from kiro_crew.config.paths import DATA_HOME_PARTS, config_dir
+ from kiro_crew.platform.governance_profiles import (
+     GOVERNANCE_ERROR_REASON,
+@@ -133,8 +134,11 @@ BEACON_SCHEMA = "1"
+ HTTP_TIMEOUT_SECS = 5.0
+ 
+ # Opt-out env var. Truthy disables; mirrors the KIROCREW_TELEMETRY convention
+-# in metrics/provider.py so operators only learn one spelling.
+-DISABLE_ENV = "KIROCREW_TELEMETRY_DISABLED"
++# in metrics/provider.py so operators only learn one spelling. A downstream
++# distribution documents its own prefix; upstream's spelling stays honored there
++# too, so an opt-out is never lost to the rename.
++DISABLE_ENV = f"{_distribution.ENV_PREFIX}_TELEMETRY_DISABLED"
++_DISABLE_ENVS = tuple(dict.fromkeys((DISABLE_ENV, "KIROCREW_TELEMETRY_DISABLED")))
+ _ENV_TRUTHY = frozenset({"1", "true", "yes", "on"})
+ 
+ # Env vars marking an automated environment. CI installs are not humans using
+@@ -220,7 +224,12 @@ def is_env_opted_out() -> bool:
+     environment says so" (a config write would be accepted and then have no
+     effect — so the UI disables the control and says why instead).
+     """
+-    return _env_truthy(DISABLE_ENV)
++    return env_opt_out_var() is not None
++
++
++def env_opt_out_var() -> str | None:
++    """Return the opt-out variable that is set truthy, or ``None``."""
++    return next((name for name in _DISABLE_ENVS if _env_truthy(name)), None)
+ 
+ 
+ def is_ci() -> bool:
+@@ -695,8 +704,9 @@ def telemetry_permitted(
+     signal, so a shared day stamp would silently drop the second app a user
+     installs on any given day.
+     """
+-    if _env_truthy(DISABLE_ENV):
+-        return Verdict(False, f"opted out via {DISABLE_ENV}", "env_opt_out")
++    opt_out_var = env_opt_out_var()
++    if opt_out_var:
++        return Verdict(False, f"opted out via {opt_out_var}", "env_opt_out")
+     if is_governance_pinned_off(audit_tool=audit_tool):
+         return Verdict(
+             False, "disabled by governance policy (capabilities.telemetry)", "governance"
+diff --git a/src/kiro_crew/config/sections_telemetry.py b/src/kiro_crew/config/sections_telemetry.py
+index 970862379d64021f881172266de6e4066796f62d..3712b173aaed7e9f8e479dde73f2cbede20ef2da 100644
+--- a/src/kiro_crew/config/sections_telemetry.py
++++ b/src/kiro_crew/config/sections_telemetry.py
+@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
+ from typing import Any
+ from urllib.parse import urlsplit as _urlsplit
+ 
++from kiro_crew import _distribution
+ from kiro_crew.config.fields import _meta
+ 
+ logger = logging.getLogger("kiro_crew.config.loader")
+@@ -18,7 +19,7 @@ logger = logging.getLogger("kiro_crew.config.loader")
+ # Default endpoint for the anonymous usage beacon (see kiro_crew/beacon.py).
+ # Lives here with the other config defaults so beacon.py adds no import edge
+ # into the config package. Setting the field to "" disables the beacon outright.
+-_DEFAULT_BEACON_ENDPOINT = "https://d175o3ylxqum0e.cloudfront.net"
++_DEFAULT_BEACON_ENDPOINT = _distribution.BEACON_ENDPOINT
+ 
+ 
+ @dataclass
+@@ -128,8 +129,8 @@ class TelemetryConfig:
+             "hostname, username, IP address, operating system, CPU "
+             "architecture, release channel, or governance posture. "
+             "Automatically suppressed in CI "
+-            "and for a non-default KIROCREW_HOME. Opt out with "
+-            "KIROCREW_TELEMETRY_DISABLED=1 or by turning this off; an "
++            f"and for a non-default {_distribution.ENV_PREFIX}_HOME. Opt out with "
++            f"{_distribution.ENV_PREFIX}_TELEMETRY_DISABLED=1 or by turning this off; an "
+             "enterprise policy can also pin it off via the "
+             "capabilities.telemetry governance scope, which this switch cannot "
+             "override. Independent "
+diff --git a/src/kiro_crew/dashboard/handlers/feedback.py b/src/kiro_crew/dashboard/handlers/feedback.py
+index 6f5488da09219f476568514b398ca2899090c199..680b4182f45a42fa38a7a34919f371cbf9f80f42 100644
+--- a/src/kiro_crew/dashboard/handlers/feedback.py
++++ b/src/kiro_crew/dashboard/handlers/feedback.py
+@@ -50,7 +50,7 @@ from typing import Any
+ import aiohttp
+ from aiohttp import web
+ 
+-from kiro_crew import beacon
++from kiro_crew import _distribution, beacon
+ from kiro_crew import sel as _sel_mod
+ from kiro_crew.config.loader import KiroCrewConfig
+ from kiro_crew.dashboard.handlers._shared import read_bounded_json, read_capped_response
+@@ -62,8 +62,8 @@ from kiro_crew.security import redact_credentials, redact_exfiltration_urls
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_INGESTION_URL = "https://ingestion.aperture-public-api.feedback.console.aws.dev/form"
+-_PROMPT_URL = "https://prompt.aperture-public-api.feedback.console.aws.dev/form/prompt"
++_INGESTION_URL = _distribution.FEEDBACK_INGESTION_URL
++_PROMPT_URL = _distribution.FEEDBACK_PROMPT_URL
+ 
+ _FORM_CATEGORY = "KiroCrew"  # brand-ok: literal Aperture portal identifier
+ _FORM_NAME = "SessionFeedback"
+diff --git a/src/kiro_crew/dashboard/handlers/telemetry.py b/src/kiro_crew/dashboard/handlers/telemetry.py
+index 3d9504a3d15ee619297a89300a2b5fe4b11b7d61..9b4adba46af95e1fbe2fe2cda19f0c51305c5342 100644
+--- a/src/kiro_crew/dashboard/handlers/telemetry.py
++++ b/src/kiro_crew/dashboard/handlers/telemetry.py
+@@ -1852,7 +1852,7 @@ async def api_beacon_status(request: web.Request) -> web.Response:
+             "reason_code": str(info.get("reason_code", "")),
+             "endpoint_configured": bool(info.get("endpoint_configured", False)),
+             "env_override": beacon.is_env_opted_out(),
+-            "env_var": beacon.DISABLE_ENV,
++            "env_var": beacon.env_opt_out_var() or beacon.DISABLE_ENV,
+             "overlay_override": overlay_override,
+             # Resolved inside beacon.status (already on a worker thread) rather
+             # than re-evaluated here, so this reports the same verdict that
+diff --git a/test/test_beacon.py b/test/test_beacon.py
+index 61e14ce10a122c6cc7304b22d8fdcefbe2b189d3..d5069636ce32cfb6701a6ae692c50f8655cfe842 100644
+--- a/test/test_beacon.py
++++ b/test/test_beacon.py
+@@ -72,7 +72,8 @@ def _isolated_home(tmp_path, monkeypatch):
+     monkeypatch.setattr(beacon, "config_dir", lambda: tmp_path)
+     monkeypatch.setattr(beacon, "is_default_home", lambda: True)
+     monkeypatch.setattr(beacon, "is_ci", lambda: False)
+-    monkeypatch.delenv(beacon.DISABLE_ENV, raising=False)
++    for name in beacon._DISABLE_ENVS:
++        monkeypatch.delenv(name, raising=False)
+     monkeypatch.delenv(beacon.DIST_ENV, raising=False)
+     # Present the unstamped shape by default. A developer who has run a
+     # packaging script has a real (gitignored) _build_info.py in the checkout,
+@@ -632,6 +633,35 @@ class TestEnvOptOutProbe:
+         assert beacon.is_env_opted_out() is True and not ok
+ 
+ 
++class TestDistributionOptOutName:
++    """A downstream distribution documents ``<prefix>_TELEMETRY_DISABLED``.
++
++    Upstream's spelling stays honored there, so an opt-out set for stock Kiro
++    Crew is never lost to the rename, and the reason names the variable set.
++    """
++
++    @pytest.fixture(autouse=True)
++    def _downstream(self, monkeypatch):
++        names = ("DEVTEAM_TELEMETRY_DISABLED", "KIROCREW_TELEMETRY_DISABLED")
++        monkeypatch.setattr(beacon, "_DISABLE_ENVS", names)
++        for name in names:
++            monkeypatch.delenv(name, raising=False)
++
++    def test_documented_name_follows_the_distribution(self):
++        assert beacon.DISABLE_ENV == f"{beacon._distribution.ENV_PREFIX}_TELEMETRY_DISABLED"
++
++    @pytest.mark.parametrize("name", ["DEVTEAM_TELEMETRY_DISABLED", "KIROCREW_TELEMETRY_DISABLED"])
++    def test_either_name_opts_out(self, _isolated_home, monkeypatch, name):
++        monkeypatch.setenv(name, "1")
++        assert beacon.env_opt_out_var() == name
++        assert beacon.is_env_opted_out() is True
++        ok, reason, code = beacon.should_send(enabled=True, acked=True)
++        assert not ok and code == "env_opt_out" and name in reason
++
++    def test_unset_names_nothing(self, _isolated_home):
++        assert beacon.env_opt_out_var() is None
++
++
+ class TestDefaultHomeDetection:
+     """Exercises the REAL is_default_home (the suppression fixture stubs it)."""
+ 
+diff --git a/test/test_telemetry_handlers_cov80.py b/test/test_telemetry_handlers_cov80.py
+index ba901a3d244feb60c8b75fcf67e23208f4e7a05c..feda21feb0856b1987e564d262e8781c18374830 100644
+--- a/test/test_telemetry_handlers_cov80.py
++++ b/test/test_telemetry_handlers_cov80.py
+@@ -623,6 +623,7 @@ def _beacon_stub(monkeypatch: pytest.MonkeyPatch, info: dict, *, env_opted_out:
+     stub.status = MagicMock(return_value=info)
+     stub.is_env_opted_out = MagicMock(return_value=env_opted_out)
+     stub.DISABLE_ENV = "KIROCREW_TELEMETRY_DISABLED"
++    stub.env_opt_out_var = MagicMock(return_value=None)
+     monkeypatch.setattr(h, "beacon", stub)
+     return stub
+ 
+diff --git a/website/src/components/PrivacyDisclosure.tsx b/website/src/components/PrivacyDisclosure.tsx
+index ae808a9288b68f2b749849a63b34a02e6ed90e82..cf5b8760c001c3a539a9e0aee014ea6a5c7af70b 100644
+--- a/website/src/components/PrivacyDisclosure.tsx
++++ b/website/src/components/PrivacyDisclosure.tsx
+@@ -5,6 +5,7 @@ import { Toggle } from './ui'
+ import { api } from '../api/client'
+ import { i18nT } from '../i18n/t'
+ import { SettingRef } from './settingRef/SettingRef'
++import { DISTRIBUTION } from '../distribution'
+ 
+ /** Read-only CLI twins of the toggle, kept for headless hosts and for the one
+  * case the toggle cannot win: a `config.local.json` overlay or the env var. */
+@@ -25,10 +26,12 @@ const SHELL_LABEL_KEY = {
+ 
+ /** The three per-shell env-var forms, keyed by the same shell ids as
+  * `SHELL_LABEL_KEY` so a new shell cannot be added without its label. */
++export const TELEMETRY_DISABLED_ENV = `${DISTRIBUTION.envPrefix}_TELEMETRY_DISABLED` as const
++
+ export const SHELL_COMMANDS = [
+-  { shell: 'macos', command: 'export KIROCREW_TELEMETRY_DISABLED=1' },
+-  { shell: 'powershell', command: "$env:KIROCREW_TELEMETRY_DISABLED = '1'" },
+-  { shell: 'cmd', command: 'set KIROCREW_TELEMETRY_DISABLED=1' },
++  { shell: 'macos', command: `export ${TELEMETRY_DISABLED_ENV}=1` },
++  { shell: 'powershell', command: `$env:${TELEMETRY_DISABLED_ENV} = '1'` },
++  { shell: 'cmd', command: `set ${TELEMETRY_DISABLED_ENV}=1` },
+ ] as const satisfies ReadonlyArray<{
+   shell: keyof typeof SHELL_LABEL_KEY
+   command: string
+@@ -177,7 +180,7 @@ export function TelemetryToggle({ renderControl }: TelemetryToggleProps = {}) {
+           <Trans
+             i18nKey="privacyDisclosure.envOverrideWithSettingRef"
+             components={{
+-              settingRef: <SettingRef kind="env" configKey={statusQ.data?.env_var ?? 'KIROCREW_TELEMETRY_DISABLED'} envIntent="unset" />,
++              settingRef: <SettingRef kind="env" configKey={statusQ.data?.env_var ?? TELEMETRY_DISABLED_ENV} envIntent="unset" />,
+             }}
+           />
+         </p>
+diff --git a/website/src/distribution.ts b/website/src/distribution.ts
+index 3c78fac547928c7aa715bcd513439be089e5f7e4..4ed89ac1eef7e64ef077108c8e65ee9d22ada7d2 100644
+--- a/website/src/distribution.ts
++++ b/website/src/distribution.ts
+@@ -9,4 +9,8 @@ export const DISTRIBUTION = {
+   defaultPort: 5476,
+   /** Config-vocabulary id of the default harness ('kas', 'kiro', 'claude', ...). */
+   defaultAcpBackend: 'kas',
++  /** Community chat linked from the nav rail; '' hides the button. */
++  communityUrl: 'https://kiro.dev/discord/',
++  /** Prefix of the environment variables users set (<prefix>_TELEMETRY_DISABLED, ...). */
++  envPrefix: 'KIROCREW',
+ } as const
+diff --git a/website/src/shell/nav/railChrome.tsx b/website/src/shell/nav/railChrome.tsx
+index 1dc5c8e6f58ed203990d8f100c2835a9ffa1847b..26860d6199133db8a4acfeccb416c28179aba6c1 100644
+--- a/website/src/shell/nav/railChrome.tsx
++++ b/website/src/shell/nav/railChrome.tsx
+@@ -4,6 +4,7 @@ import { ArrowLeftToLine, PanelLeft } from 'lucide-react'
+ import { GithubIcon, DiscordIcon } from '../../components/BrandIcon'
+ import type { getThemeBranding } from '../../themeBranding'
+ import { i18nT } from '../../i18n/t'
++import { DISTRIBUTION } from '../../distribution'
+ import { uiLocation } from '../../uiLocations/uiLocation'
+ import { useGuideRevealScope } from '../../guide/GuideRevealScope'
+ import { OverlayPortal } from '../../components/overlayRoot'
+@@ -250,7 +251,9 @@ export function RailCommunityLinks({ effectiveCollapsed, setReportProblemOpen }:
+               its sibling link so the row's width budget above is unchanged. */}
+           <button type="button" onClick={() => setReportProblemOpen(true)} title={i18nT('app.report_a_problem_with_diagnostics')} aria-label={i18nT('app.report_a_problem_with_diagnostics')} {...uiLocation('shell.report-problem')} className="min-w-0 overflow-hidden text-ellipsis rounded text-muted hover:text-text transition-colors cursor-pointer bg-transparent border-0 p-0 text-[12px]">{i18nT('app.report_issue')}</button>
+         </div>
+-        <a href="https://kiro.dev/discord/" target="_blank" rel="noopener noreferrer" title={i18nT('app.discord_community')} aria-label={i18nT('app.kiro_discord_community')} className="flex items-center justify-center ml-1 w-6 h-6 rounded-md text-muted hover:text-text hover:bg-bg-hover transition-colors shrink-0"><DiscordIcon size={15} /></a>
++        {DISTRIBUTION.communityUrl && (
++          <a href={DISTRIBUTION.communityUrl} target="_blank" rel="noopener noreferrer" title={i18nT('app.discord_community')} aria-label={i18nT('app.kiro_discord_community')} className="flex items-center justify-center ml-1 w-6 h-6 rounded-md text-muted hover:text-text hover:bg-bg-hover transition-colors shrink-0"><DiscordIcon size={15} /></a>
++        )}
+       </div>
+     </div>
+   )
+diff --git a/website/src/test/PrivacyPanel.test.tsx b/website/src/test/PrivacyPanel.test.tsx
+index 74dff4dce53325638be547ea653c4a08dc2b949f..8df183e76cd88366e8c087bde0213b77115c490f 100644
+--- a/website/src/test/PrivacyPanel.test.tsx
++++ b/website/src/test/PrivacyPanel.test.tsx
+@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
+ import { renderWithProviders } from './helpers'
+ import { PrivacyPanel } from '../pages/settings/PrivacyPanel'
+ import { api } from '../api/client'
++import { DISTRIBUTION } from '../distribution'
+ 
+ vi.mock('../api/client', async importOriginal => {
+   const mod = await importOriginal<typeof import('../api/client')>()
+@@ -67,18 +68,21 @@ const REMOVED_FIELDS = [
+ 
+ const EXCLUSION_DISCLOSURE = "Prompts, responses, files, credentials, hostnames, usernames, or your operating system. Your IP is not stored."
+ 
++// The opt-out variable carries the distribution's prefix (KIROCREW_ upstream).
++const OPT_OUT = `${DISTRIBUTION.envPrefix}_TELEMETRY_DISABLED`
++
+ const CONTROL_COMMANDS = [
+   'kirocrew telemetry status',
+   'kirocrew telemetry disable',
+-  'export KIROCREW_TELEMETRY_DISABLED=1',
+-  "$env:KIROCREW_TELEMETRY_DISABLED = '1'",
+-  'set KIROCREW_TELEMETRY_DISABLED=1',
++  `export ${OPT_OUT}=1`,
++  `$env:${OPT_OUT} = '1'`,
++  `set ${OPT_OUT}=1`,
+ ] as const
+ 
+ const SHELL_COMMANDS = [
+-  ['macOS / Linux', 'export KIROCREW_TELEMETRY_DISABLED=1'],
+-  ['Windows PowerShell', "$env:KIROCREW_TELEMETRY_DISABLED = '1'"],
+-  ['Windows Command Prompt', 'set KIROCREW_TELEMETRY_DISABLED=1'],
++  ['macOS / Linux', `export ${OPT_OUT}=1`],
++  ['Windows PowerShell', `$env:${OPT_OUT} = '1'`],
++  ['Windows Command Prompt', `set ${OPT_OUT}=1`],
+ ] as const
+ 
+ const TOGGLE_LABEL = 'Send anonymous usage heartbeat'
