@@ -448,6 +448,111 @@ def rewrite_agent_prerequisite():
     return n
 
 
+LOADING_GHOST = re.compile(r"    var GHOST_SVG =\r?\n.*?'</svg></div></div></div>';\r?\n", re.S)
+
+
+def rewrite_loading_character():
+    """The desktop loading screen draws Kiro's ghost inline (GHOST_SVG). Swap in
+    DevTeam's character (scripts/brand_assets.py -> rebrand/loading-character.json),
+    keeping the page's structure: a white body path and a .g-eyes group it blinks."""
+    path = ROOT / "website/electron/loading.html"
+    text = path.read_text(encoding="utf-8")
+    if len(LOADING_GHOST.findall(text)) != 1:
+        sys.exit("rewrite_strings: loading.html GHOST_SVG changed upstream; update rewrite_loading_character()")
+    c = json.loads((HERE.parent / "rebrand/loading-character.json").read_text(encoding="utf-8"))
+    eyes = "".join(f"          '<path d=\"{d}\" fill=\"#000000\"/>' +\n" for d in c["eyes"])
+    block = ("    var GHOST_SVG =\n"
+             "      '<div class=\"float\"><div class=\"tilt\"><div class=\"pop\"><svg class=\"g-svg\" "
+             f"viewBox=\"{c['viewBox']}\" fill=\"none\" aria-hidden=\"true\">' +\n"
+             f"        '<path d=\"{c['body']}\" fill=\"#ffffff\"/>' +\n"
+             "        '<g class=\"g-eyes\">' +\n" + eyes +
+             "        '</g>' +\n"
+             "      '</svg></div></div></div>';\n")
+    if "\r\n" in text:  # a Windows checkout
+        block = block.replace("\n", "\r\n")
+    path.write_text(LOADING_GHOST.sub(lambda _m: block, text), encoding="utf-8", newline="")
+    return 1
+
+
+KIRO_GHOST_SVG = re.compile(
+    r'(<svg width=\{size\} height=\{h\} )viewBox="255 110 745 980"( fill="none" className=\{className\}>)'
+    r'(\s*)<path\b[^>]*fill="#ffffff"[^>]*/>\s*<path\b[^>]*fill="#000000"[^>]*/>\s*<path\b[^>]*fill="#000000"[^>]*/>')
+
+
+def rewrite_kiro_ghost_component():
+    """website/src/components/KiroGhost.tsx draws the ghost inline for the onboarding
+    panel (Import setup, Kiro CLI gate), the welcome view and Crew mode. Same swap
+    as the loading screen, from the same rebrand/loading-character.json."""
+    path = ROOT / "website/src/components/KiroGhost.tsx"
+    text = path.read_text(encoding="utf-8")
+    if len(KIRO_GHOST_SVG.findall(text)) != 1:
+        sys.exit("rewrite_strings: KiroGhost.tsx SVG changed upstream; update rewrite_kiro_ghost_component()")
+    c = json.loads((HERE.parent / "rebrand/loading-character.json").read_text(encoding="utf-8"))
+
+    def swap(m):
+        nl = m.group(3)
+        paths = [f'<path fill="#ffffff" d="{c["body"]}" />'] + [f'<path fill="#000000" d="{d}" />' for d in c["eyes"]]
+        return f'{m.group(1)}viewBox="{c["viewBox"]}"{m.group(2)}' + "".join(nl + p for p in paths)
+
+    path.write_text(KIRO_GHOST_SVG.sub(swap, text), encoding="utf-8", newline="")
+    return 1
+
+
+HEX_RE = re.compile(r"#([0-9a-fA-F]{6})\b")
+
+
+def _brand_hue(match, hue):
+    """A purple-tinted grey keeps its lightness and saturation, on the brand hue."""
+    import colorsys
+    r, g, b = (int(match.group(1)[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    if not (240 <= h * 360 <= 320) or s == 0:
+        return match.group(0)
+    r, g, b = colorsys.hls_to_rgb(hue / 360, l, s)
+    return "#" + "".join(f"{round(v * 255):02x}" for v in (r, g, b))
+
+
+def rewrite_brand_colors():
+    """Kiro's purple -> ScienceSoft colours (rebrand/brand-colors.json): the default
+    'kiro' theme's accent family and purple-tinted greys, and exact literals
+    (avatar default tile, share card, loading screen, theme label)."""
+    spec = json.loads((HERE.parent / "rebrand/brand-colors.json").read_text(encoding="utf-8"))
+    n = 0
+    themes = spec["themes"]
+    path = ROOT / themes["file"]
+    css = path.read_text(encoding="utf-8")
+    for name, values in themes["blocks"].items():
+        block_re = re.compile(r'(\[data-theme="' + re.escape(name) + r'"\]\{)(.*?)(\r?\n\})', re.S)
+        found = block_re.findall(css)
+        if len(found) != 1:
+            sys.exit(f"rewrite_strings: theme {name} not found once in {themes['file']}; update rebrand/brand-colors.json")
+
+        def recolor(m, values=values, name=name):
+            body = m.group(2)
+            for var, value in values.items():
+                var_re = re.compile(r"(?<![\w-])" + re.escape(var) + r":[^;]+;")
+                if len(var_re.findall(body)) != 1:
+                    sys.exit(f"rewrite_strings: {name} {var} not found once; update rebrand/brand-colors.json")
+                body = var_re.sub(lambda _m: f"{var}:{value};", body)
+            body = HEX_RE.sub(lambda h: _brand_hue(h, themes["grey_hue"]), body)
+            # rgba() tints of the old accents that no explicit value covered.
+            body = re.sub(r"rgba\((?:1[2-9]\d|2\d\d),\s*(?:[3-9]\d|1[0-5]\d),\s*2[23]\d,", "rgba(26,143,255,", body)
+            return m.group(1) + body + m.group(3)
+
+        css = block_re.sub(recolor, css)
+        n += 1
+    path.write_text(css, encoding="utf-8", newline="")
+    for lit in spec["literals"]:
+        p = ROOT / lit["file"]
+        text = p.read_text(encoding="utf-8")
+        if text.count(lit["old"]) != lit["count"]:
+            sys.exit(f"rewrite_strings: {lit['file']}: expected {lit['count']}x {lit['old']!r}, found "
+                     f"{text.count(lit['old'])}; update rebrand/brand-colors.json")
+        p.write_text(text.replace(lit["old"], lit["new"]), encoding="utf-8", newline="")
+        n += lit["count"]
+    return n
+
+
 def main():
     total = {}
     # Python sources (backend, CLI, built-in skills' scripts)
@@ -487,6 +592,8 @@ def main():
     total["desktop package"] = int(new != data)
     total["catalog files"] = rewrite_catalogs()
     total["agent prerequisite"] = rewrite_agent_prerequisite()
+    total["loading character"] = rewrite_loading_character() + rewrite_kiro_ghost_component()
+    total["brand colours"] = rewrite_brand_colors()
     print("  strings: " + ", ".join(f"{k} {v}" for k, v in total.items()))
     regenerate_indexes()
 

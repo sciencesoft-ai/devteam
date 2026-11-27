@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <rect width="300" height="300" fill="#005EB8"/>
+  <path d="M36.80 59.40H96.80A102.00 102.00 0 0 1 96.80 263.40H36.80Q2.80 263.40 2.80 229.40V93.40Q2.80 59.40 36.80 59.40ZM66.36 61.40V35.40H80.36V61.40ZM60.36 27.60a13.00 13.00 0 1 0 26.00 0a13.00 13.00 0 1 0 -26.00 0Z" fill="#fff" transform="rotate(-10 114.8 117.4) translate(229.6 0) scale(-1 1)"/>
+  <path d="M79.80 117.40a11.00 16.00 0 1 0 22.00 0a11.00 16.00 0 1 0 -22.00 0Z" transform="rotate(-10 114.8 117.4) translate(229.6 0) scale(-1 1)"/>
+  <path d="M127.80 117.40a11.00 16.00 0 1 0 22.00 0a11.00 16.00 0 1 0 -22.00 0Z" transform="rotate(-10 114.8 117.4) translate(229.6 0) scale(-1 1)"/>
+</svg>

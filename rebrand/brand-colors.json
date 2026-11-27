@@ -1,0 +1,48 @@
+{
+  "_comment": "ScienceSoft colours in place of Kiro's purple (rewrite_brand_colors() in scripts/rewrite_strings.py). The default theme keeps its id 'kiro' so stored settings keep working; its accent family becomes brand blue, and its purple-tinted greys take the brand hue. Every literal must match exactly 'count' times, or prepare fails.",
+  "themes": {
+    "file": "website/src/styles/theme-palettes.css",
+    "grey_hue": 212,
+    "blocks": {
+      "kiro-dark": {
+        "--accent": "#1A8FFF",
+        "--accent-hover": "#479BEB",
+        "--accent-subtle": "rgba(26,143,255,.16)",
+        "--accent-glow": "rgba(26,143,255,.3)",
+        "--ring": "#1A8FFF",
+        "--aim": "#0AB9CF",
+        "--aim-subtle": "rgba(10,185,207,.15)",
+        "--diff-hunk": "rgba(71,155,235,.15)",
+        "--diff-hunk-text": "#479BEB",
+        "--json-key": "#479BEB",
+        "--json-num": "#0AB9CF"
+      },
+      "kiro-light": {
+        "--accent": "#005EB8",
+        "--accent-hover": "#2F5597",
+        "--accent-subtle": "rgba(0,94,184,.12)",
+        "--accent-glow": "rgba(0,94,184,.15)",
+        "--ring": "#005EB8",
+        "--aim": "#2F5597",
+        "--aim-subtle": "rgba(47,85,151,.12)",
+        "--diff-hunk": "rgba(0,94,184,.12)",
+        "--diff-hunk-text": "#2F5597",
+        "--json-key": "#005EB8",
+        "--json-num": "#2F5597"
+      }
+    }
+  },
+  "literals": [
+    {"file": "website/src/hooks/useTheme.tsx", "old": "{ value: 'kiro', label: '👻 Kiro' }", "new": "{ value: 'kiro', label: 'ScienceSoft' }", "count": 1},
+    {"file": "website/electron/loading.html", "old": "#8E48FF", "new": "#005EB8", "count": 2},
+    {"file": "website/electron/gateway-supervisor.js", "old": "#8E48FF", "new": "#005EB8", "count": 1},
+    {"file": "website/src/lib/avatarPoses.ts", "old": "DEFAULT_POSE_BG = '#9046ff'", "new": "DEFAULT_POSE_BG = '#005eb8'", "count": 1},
+    {"file": "website/src/lib/kiroGhostAvatar.ts", "old": "BRAND_PURPLE = '#9046ff'", "new": "BRAND_PURPLE = '#005eb8'", "count": 1},
+    {"file": "website/src/components/CrewAvatarBuilder.tsx", "old": "'#9046ff': 'components.avatarBuilder.tile_purple'", "new": "'#005eb8': 'components.avatarBuilder.tile_purple'", "count": 1},
+    {"file": "src/kiro_crew/crew_avatar_seed.py", "old": "DEFAULT_POSE_BG: str = \"#9046ff\"", "new": "DEFAULT_POSE_BG: str = \"#005eb8\"", "count": 1},
+    {"file": "src/kiro_crew/members_parts/self_edit.py", "old": "\"tile\": \"#9046ff\"", "new": "\"tile\": \"#005eb8\"", "count": 1},
+    {"file": "website/src/pages/chat/share/ShareCard.tsx", "old": "#7c3aed", "new": "#005EB8", "count": 1},
+    {"file": "website/src/pages/chat/share/ShareCard.tsx", "old": "#f5f3ff", "new": "#FFFFFF", "count": 2},
+    {"file": "src/kiro_crew/agent_panel_templates/default.html", "old": "#8e48ff", "new": "#005EB8", "count": 1}
+  ]
+}
